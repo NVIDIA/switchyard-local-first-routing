@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: switchyard-provider
+kind: model-provider
+version: 0.1.0
+description: Switchyard Local-first Routing (Beta) sidecar (local and cloud models; one model per Verification-Gated Routing preset)
+author: NVIDIA

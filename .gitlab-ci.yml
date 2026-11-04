@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Release quarantine for the plugin's python_dependencies: they must resolve from releases at least
+# QUARANTINE_DAYS old, and Hermes's catalog gate (`hermes plugins validate --install-deps`) must pass
+# with the same cutoff. uv reads UV_EXCLUDE_NEWER, so Hermes's own dependency install honours it too.
+
+variables:
+  QUARANTINE_DAYS: "3"
+  HERMES_REPO: "https://github.com/NousResearch/hermes-agent.git"
+  HERMES_REF: "v0.22.5"
+
+default:
+  image: python:3.11-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates >/dev/null
+    - pip install -q uv
+    - export UV_EXCLUDE_NEWER="$(date -u -d "${QUARANTINE_DAYS} days ago" +%Y-%m-%dT%H:%M:%SZ)"
+    - echo "Resolving only releases published before ${UV_EXCLUDE_NEWER}"
+
+dependency-quarantine:
+  script:
+    - uv run --no-project --with pyyaml python -c "import yaml; print('\n'.join(yaml.safe_load(open('switchyard/plugin.yaml'))['python_dependencies']))" > requirements.in
+    - cat requirements.in
+    - uv pip compile --python-version 3.11 requirements.in
+
+catalog-validate:
+  script:
+    - git clone --quiet --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" /tmp/hermes-agent
+    - uv venv --quiet --python 3.11 /tmp/hermes-venv
+    - (cd /tmp/hermes-agent && uv pip install --quiet --python /tmp/hermes-venv/bin/python -e .)
+    - export HERMES_HOME="$(mktemp -d)"
+    - /tmp/hermes-venv/bin/hermes plugins validate "$CI_PROJECT_DIR/switchyard" --install-deps
