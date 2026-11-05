@@ -11,7 +11,12 @@ variables:
   HERMES_REF: "v0.22.5"
 
 default:
-  image: python:3.11-slim
+  # Hermes declares its runtime dependencies only for Python 3.14.
+  image: python:3.14-slim
+  tags:
+    - os/linux
+    - type/docker
+    - size/medium
   before_script:
     - apt-get update -qq && apt-get install -y -qq --no-install-recommends git ca-certificates >/dev/null
     - pip install -q uv
@@ -22,12 +27,39 @@ dependency-quarantine:
   script:
     - uv run --no-project --with pyyaml python -c "import yaml; print('\n'.join(yaml.safe_load(open('switchyard/plugin.yaml'))['python_dependencies']))" > requirements.in
     - cat requirements.in
-    - uv pip compile --python-version 3.11 requirements.in
+    - uv pip compile --python-version 3.14 requirements.in
 
 catalog-validate:
   script:
     - git clone --quiet --depth 1 --branch "$HERMES_REF" "$HERMES_REPO" /tmp/hermes-agent
-    - uv venv --quiet --python 3.11 /tmp/hermes-venv
+    - uv venv --quiet --python 3.14 /tmp/hermes-venv
     - (cd /tmp/hermes-agent && uv pip install --quiet --python /tmp/hermes-venv/bin/python -e .)
     - export HERMES_HOME="$(mktemp -d)"
     - /tmp/hermes-venv/bin/hermes plugins validate "$CI_PROJECT_DIR/switchyard" --install-deps
+
+# Server, token and project key come from CI/CD variables; the job is skipped where they are not set.
+sonarqube:
+  image:
+    name: sonarsource/sonar-scanner-cli:12
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: sonarqube
+    paths:
+      - .sonar/cache
+  before_script: []
+  script:
+    - >-
+      sonar-scanner
+      -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+      -Dsonar.sources=switchyard
+      -Dsonar.tests=switchyard
+      -Dsonar.exclusions=switchyard/tests/**
+      -Dsonar.test.inclusions=switchyard/tests/**
+      -Dsonar.python.version=3.14
+      -Dsonar.qualitygate.wait=true
+  allow_failure: true
+  rules:
+    - if: $SONAR_TOKEN && $SONAR_HOST_URL && $SONAR_PROJECT_KEY

@@ -519,76 +519,77 @@ function SetupForm(props) {
     : h('p', { className: 'text-xs text-muted-foreground' }, 'Loading your Hermes models…')
 }
 
-function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
-  const current = config || {}
-  const defaultPreset = (current.presets || []).find(p => p.name === current.default_preset)
-  const [local, setLocal] = useState(() => tierDraft('local', current.local, hermes))
-  const [cloud, setCloud] = useState(() => tierDraft('cloud', current.cloud, hermes))
-  const [algorithm, setAlgorithm] = useState(() =>
-    defaultPreset && isAvailable(algorithms.find(a => a.name === defaultPreset.algorithm))
-      ? defaultPreset.algorithm
-      : RECOMMENDED
+const PREPARING_LOCAL = 'Preparing the local model…'
+
+function Warnings({ warnings }) {
+  return (warnings || []).map((w, i) =>
+    h('p', { className: 'rounded-md border border-amber-500/50 px-3 py-2 text-xs', key: i }, w)
   )
-  const [bounded, setBounded] = useState(Boolean(current.bounded_local))
+}
+
+function initialAlgorithm(algorithms, defaultPreset) {
+  return defaultPreset && isAvailable(algorithms.find(a => a.name === defaultPreset.algorithm))
+    ? defaultPreset.algorithm
+    : RECOMMENDED
+}
+
+function setupReady({ chosen, cloud, keepsDefault, local }) {
+  return tierReady(local) && tierReady(cloud) && isAvailable(chosen) && (!chosen || chosen.guided || keepsDefault)
+}
+
+function setupRequest({ algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local }) {
+  return {
+    body: {
+      local: tierBody(local, hermes),
+      cloud: tierBody(cloud, hermes),
+      preset_name: keepsDefault ? defaultPreset.name : algorithm,
+      preset: { algorithm, options: {} },
+      bounded_local: bounded
+    },
+    label: chosen ? chosen.label : algorithm,
+    managed: local.source === 'managed' || cloud.source === 'managed'
+  }
+}
+
+async function applySetup({ body, managed }, onStatus, live) {
+  if (managed) {
+    onStatus(PREPARING_LOCAL, null)
+    await runQuickstart(job => onStatus(job.detail || PREPARING_LOCAL, jobPercent(job)), () => live.current)
+  }
+
+  onStatus('Configuring Switchyard…', null)
+
+  const result = await runSetup(body, job => onStatus(setupStatus(job), null), () => live.current)
+  await host.request('reload.env').catch(() => undefined)
+
+  return result
+}
+
+// The setup form's save: its progress and error, and run(), which calls onSaved once setup has answered.
+function useSetupRun(onSaved) {
   const [status, setStatus] = useState(null)
   const [percent, setPercent] = useState(null)
   const [error, setError] = useState(null)
   const live = useLive()
-  const busy = status !== null
-  const chosen = algorithms.find(a => a.name === algorithm)
-  // Keeping the default preset's algorithm keeps that preset (and its route settings).
-  const keepsDefault = Boolean(defaultPreset && defaultPreset.algorithm === algorithm)
+  const show = (text, value) => {
+    setStatus(text)
+    setPercent(value)
+  }
 
-  const canSave =
-    tierReady(local) && tierReady(cloud) && isAvailable(chosen) && (!chosen || chosen.guided || keepsDefault)
-
-  const submit = async () => {
-    if (!canSave || busy) {
-      return
-    }
-
+  const run = async request => {
     setError(null)
 
     try {
-      if (local.source === 'managed' || cloud.source === 'managed') {
-        setStatus('Preparing the local model…')
-        await runQuickstart(
-          job => {
-            setStatus(job.detail || 'Preparing the local model…')
-            setPercent(jobPercent(job))
-          },
-          () => live.current
-        )
-      }
-
-      setStatus('Configuring Switchyard…')
-      setPercent(null)
-
-      const presetName = keepsDefault ? defaultPreset.name : algorithm
-
-      const body = {
-        local: tierBody(local, hermes),
-        cloud: tierBody(cloud, hermes),
-        preset_name: presetName,
-        preset: { algorithm, options: {} },
-        bounded_local: bounded
-      }
-      const result = await runSetup(body, job => setStatus(setupStatus(job)), () => live.current)
-      await host.request('reload.env').catch(() => undefined)
+      const result = await applySetup(request, show, live)
 
       if (!live.current) {
         return
       }
 
-      setLocal(d => ({ ...d, api_key: '' }))
-      setCloud(d => ({ ...d, api_key: '' }))
-      setStatus(null)
+      show(null, null)
 
       if (result.running) {
-        host.notify({
-          kind: 'success',
-          message: `Switchyard (${chosen ? chosen.label : algorithm}) is now the default model`
-        })
+        host.notify({ kind: 'success', message: `Switchyard (${request.label}) is now the default model` })
       } else {
         setError(result.error || 'Switchyard is configured but did not start')
       }
@@ -596,11 +597,81 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
       onSaved()
     } catch (err) {
       if (live.current) {
-        setStatus(null)
-        setPercent(null)
+        show(null, null)
         setError(errorText(err))
       }
     }
+  }
+
+  return { busy: status !== null, error, percent, run, status }
+}
+
+function AlgorithmFields({ algorithm, algorithms, bounded, busy, chosen, configured, keepsDefault, onSelect }) {
+  const note = chosen && (bounded ? chosen.bounded_note : chosen.note)
+
+  return h(
+    'fieldset',
+    { className: 'grid gap-2', disabled: busy },
+    h(
+      'legend',
+      { className: 'mb-2 text-sm font-semibold' },
+      configured ? 'Routing algorithm for the default preset' : 'Routing algorithm'
+    ),
+    h(AlgorithmPicker, { algorithms, onSelect, selected: algorithm }),
+    note ? h('p', { className: 'text-xs text-muted-foreground' }, note) : null,
+    chosen && !chosen.guided && !keepsDefault
+      ? h(
+          'p',
+          { className: 'text-xs text-muted-foreground' },
+          'Advanced algorithms need route settings: add them as a preset below.'
+        )
+      : null
+  )
+}
+
+function SetupProgress({ percent, status }) {
+  if (!status) {
+    return null
+  }
+
+  return h(
+    'div',
+    { className: 'grid gap-2', role: 'status' },
+    percent !== null
+      ? h(
+          'div',
+          { className: 'h-1.5 overflow-hidden rounded-full bg-muted' },
+          h('div', { className: 'h-full bg-primary transition-all', style: { width: `${percent}%` } })
+        )
+      : null,
+    h('p', { className: 'text-xs text-muted-foreground' }, status)
+  )
+}
+
+function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
+  const current = config || {}
+  const defaultPreset = (current.presets || []).find(p => p.name === current.default_preset)
+  const [local, setLocal] = useState(() => tierDraft('local', current.local, hermes))
+  const [cloud, setCloud] = useState(() => tierDraft('cloud', current.cloud, hermes))
+  const [algorithm, setAlgorithm] = useState(() => initialAlgorithm(algorithms, defaultPreset))
+  const [bounded, setBounded] = useState(Boolean(current.bounded_local))
+  const save = useSetupRun(() => {
+    setLocal(d => ({ ...d, api_key: '' }))
+    setCloud(d => ({ ...d, api_key: '' }))
+    onSaved()
+  })
+  const busy = save.busy
+  const chosen = algorithms.find(a => a.name === algorithm)
+  // Keeping the default preset's algorithm keeps that preset (and its route settings).
+  const keepsDefault = Boolean(defaultPreset && defaultPreset.algorithm === algorithm)
+  const canSave = setupReady({ chosen, cloud, keepsDefault, local })
+
+  const submit = async () => {
+    if (!canSave || busy) {
+      return
+    }
+
+    await save.run(setupRequest({ algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local }))
   }
 
   const onKeyDown = e => e.key === 'Enter' && !e.nativeEvent.isComposing && void submit()
@@ -620,30 +691,18 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
       h(TierFields, { draft: local, hermes, name: 'local', onChange: setLocal, onKeyDown }),
       h(TierFields, { draft: cloud, hermes, name: 'cloud', onChange: setCloud, onKeyDown })
     ),
-    (current.warnings || []).map((w, i) =>
-      h('p', { className: 'rounded-md border border-amber-500/50 px-3 py-2 text-xs', key: i }, w)
-    ),
+    h(Warnings, { warnings: current.warnings }),
     algorithms.length
-      ? h(
-      'fieldset',
-      { className: 'grid gap-2', disabled: busy },
-          h(
-            'legend',
-            { className: 'mb-2 text-sm font-semibold' },
-            configured ? 'Routing algorithm for the default preset' : 'Routing algorithm'
-          ),
-          h(AlgorithmPicker, { algorithms, onSelect: setAlgorithm, selected: algorithm }),
-          chosen && (bounded ? chosen.bounded_note : chosen.note)
-            ? h('p', { className: 'text-xs text-muted-foreground' }, bounded ? chosen.bounded_note : chosen.note)
-            : null,
-          chosen && !chosen.guided && !keepsDefault
-            ? h(
-        'p',
-        { className: 'text-xs text-muted-foreground' },
-                'Advanced algorithms need route settings: add them as a preset below.'
-              )
-            : null
-        )
+      ? h(AlgorithmFields, {
+          algorithm,
+          algorithms,
+          bounded,
+          busy,
+          chosen,
+          configured,
+          keepsDefault,
+          onSelect: setAlgorithm
+        })
       : null,
     h(ToggleRow, {
       below: h(
@@ -661,21 +720,8 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
       label: 'Bound local thinking time',
       onChange: setBounded
     }),
-    status
-      ? h(
-          'div',
-          { className: 'grid gap-2', role: 'status' },
-          percent !== null
-            ? h(
-                'div',
-                { className: 'h-1.5 overflow-hidden rounded-full bg-muted' },
-                h('div', { className: 'h-full bg-primary transition-all', style: { width: `${percent}%` } })
-              )
-            : null,
-          h('p', { className: 'text-xs text-muted-foreground' }, status)
-        )
-      : null,
-    error ? h('p', { className: 'text-xs text-destructive' }, error) : null,
+    h(SetupProgress, { percent: save.percent, status: save.status }),
+    save.error ? h('p', { className: 'text-xs text-destructive' }, save.error) : null,
     h(
       'div',
       { className: 'flex justify-end' },
@@ -1454,12 +1500,90 @@ function openMonitor() {
   host.navigate(PATH)
 }
 
+function PageHeader({ onChanged, state }) {
+  const ready = Boolean(state && state.configured)
+
+  return h(
+    'header',
+    { className: 'grid gap-2' },
+    h(
+      'h1',
+      { className: 'flex items-center gap-2 text-lg font-semibold' },
+      PRODUCT_NAME,
+      h(
+        'span',
+        { className: 'rounded-full border border-amber-500/60 px-2 py-0.5 text-xs font-medium text-amber-600' },
+        'Beta'
+      )
+    ),
+    h(
+      'p',
+      { className: 'text-xs text-muted-foreground' },
+      `${PRODUCT_NAME} answers with the efficient model when it can and uses the capable model when it must, ` +
+        'with Verification-Gated Routing (VGR). Each preset appears as a model under the Switchyard provider. ' +
+        'It is in beta: its routing and settings may change between releases.'
+    ),
+    h(StatusLine, { state }),
+    ready ? h(PinToggle, { config: state.config, onChanged }) : null,
+    ready ? h(Warnings, { warnings: state.config.warnings }) : null,
+    ready ? h(CreditAlerts, { state }) : null
+  )
+}
+
+function PageTabs({ onSelect, shown }) {
+  return h(
+    'div',
+    { className: 'flex items-center justify-between gap-2' },
+    h(Segments, {
+      onSelect,
+      options: [
+        ['monitor', 'Monitor', 'Live routing decisions'],
+        ['setup', 'Setup', 'Tiers and presets']
+      ],
+      value: shown
+    }),
+    h(Button, { onClick: () => void openInBrowser(), size: 'xs', variant: 'text' }, 'Open in browser')
+  )
+}
+
+function SetupTab({ algorithms, configured, onChanged, state }) {
+  const ready = Boolean(state && state.configured)
+
+  return [
+    h(
+      Section,
+      { key: 'tiers', title: configured ? 'Tiers' : 'Set up the efficient and capable models' },
+      state
+        ? h(SetupForm, {
+            algorithms,
+            config: state.config,
+            configured,
+            key: ready ? 'configured' : 'new',
+            onSaved: onChanged
+          })
+        : null
+    ),
+    ready
+      ? h(
+          Section,
+          {
+            hint: 'Pick a preset with /model <name> --provider switchyard, or from the model picker.',
+            key: 'presets',
+            title: 'Presets'
+          },
+          h(PresetList, { onChanged, state })
+        )
+      : null
+  ]
+}
+
 function SwitchyardPage() {
   const [tab, setTab] = useState(null)
   const [polling, setPolling] = useState(false)
   const [state, refresh] = useSwitchyardState(polling ? MONITOR_POLL_MS : 0)
   const algorithms = (state && state.algorithms) || []
-  const configured = Boolean(state && state.configured && state.active)
+  const ready = Boolean(state && state.configured)
+  const configured = ready && Boolean(state.active)
   const shown = tab || (configured ? 'monitor' : 'setup')
 
   useEffect(() => setPolling(shown === 'monitor'), [shown])
@@ -1473,78 +1597,11 @@ function SwitchyardPage() {
   return h(
     'div',
     { className: 'mx-auto grid w-full max-w-3xl gap-6 overflow-y-auto p-6' },
-    h(
-      'header',
-      { className: 'grid gap-2' },
-      h(
-        'h1',
-        { className: 'flex items-center gap-2 text-lg font-semibold' },
-        PRODUCT_NAME,
-        h(
-          'span',
-          { className: 'rounded-full border border-amber-500/60 px-2 py-0.5 text-xs font-medium text-amber-600' },
-          'Beta'
-        )
-      ),
-      h(
-        'p',
-        { className: 'text-xs text-muted-foreground' },
-        `${PRODUCT_NAME} answers with the efficient model when it can and uses the capable model when it must, ` +
-          'with Verification-Gated Routing (VGR). Each preset appears as a model under the Switchyard provider. ' +
-          'It is in beta: its routing and settings may change between releases.'
-      ),
-      h(StatusLine, { state }),
-      state && state.configured ? h(PinToggle, { config: state.config, onChanged: refresh }) : null,
-      state && state.configured && state.config.warnings && state.config.warnings.length
-        ? state.config.warnings.map((w, i) =>
-            h('p', { className: 'rounded-md border border-amber-500/50 px-3 py-2 text-xs', key: i }, w)
-          )
-        : null,
-      state && state.configured ? h(CreditAlerts, { state }) : null
-    ),
-    state && state.configured
-      ? h(
-          'div',
-          { className: 'flex items-center justify-between gap-2' },
-          h(Segments, {
-            onSelect: setTab,
-            options: [
-              ['monitor', 'Monitor', 'Live routing decisions'],
-              ['setup', 'Setup', 'Tiers and presets']
-            ],
-            value: shown
-          }),
-          h(Button, { onClick: () => void openInBrowser(), size: 'xs', variant: 'text' }, 'Open in browser')
-        )
-      : null,
-    shown === 'monitor' && state && state.configured
+    h(PageHeader, { onChanged: refresh, state }),
+    ready ? h(PageTabs, { onSelect: setTab, shown }) : null,
+    shown === 'monitor' && ready
       ? h(MonitorView, { onChanged: refresh, state })
-      : [
-          h(
-            Section,
-            { key: 'tiers', title: configured ? 'Tiers' : 'Set up the efficient and capable models' },
-            state
-              ? h(SetupForm, {
-                  algorithms,
-                  config: state.config,
-                  configured,
-                  key: state.configured ? 'configured' : 'new',
-                  onSaved: refresh
-                })
-              : null
-          ),
-          state && state.configured
-            ? h(
-                Section,
-                {
-                  hint: 'Pick a preset with /model <name> --provider switchyard, or from the model picker.',
-                  key: 'presets',
-                  title: 'Presets'
-                },
-                h(PresetList, { onChanged: refresh, state })
-              )
-            : null
-        ]
+      : h(SetupTab, { algorithms, configured, onChanged: refresh, state })
   )
 }
 
@@ -1678,7 +1735,9 @@ export default {
     rest = ctx.rest
     os = ctx.os
 
-    const reportLoaded = loaded => void api('/renderer', { method: 'POST', body: { loaded } }).catch(() => {})
+    const reportLoaded = loaded => {
+      api('/renderer', { method: 'POST', body: { loaded } }).catch(() => {})
+    }
     reportLoaded(true)
     const heartbeat = window.setInterval(() => reportLoaded(true), RENDERER_PING_MS)
     ctx.onDispose?.(() => {

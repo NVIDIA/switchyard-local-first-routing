@@ -457,11 +457,13 @@ def pin_preset(tier: str) -> Preset:
 
 def parse_pin(value: Any) -> str:
     pin = str(value or "").strip().lower()
-    if pin in ("off", "none", "smart"):
-        pin = ""
-    if pin and pin not in PIN_TARGETS:
+    if pin in ("", "off", "none", "smart"):
+        return ""
+    # The built-in name, never the caller's string: the tap's pin endpoint echoes this back.
+    target = next((target for target in PIN_TARGETS if target == pin), None)
+    if target is None:
         raise SettingsError(f"switchyard.pin must be one of {', '.join(PIN_TARGETS)}, or empty to route normally")
-    return pin
+    return target
 
 
 def require_available(name: str, algorithm: str) -> None:

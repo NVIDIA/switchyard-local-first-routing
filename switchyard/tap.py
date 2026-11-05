@@ -694,7 +694,7 @@ class _Handler(BaseHTTPRequestHandler):
                 status = status if delivered else CLIENT_CLOSED
                 self.close_connection = True
             else:
-                logger.warning("vgr tap: %s upstream %s failed: %s", route, upstream, error)
+                logger.warning("vgr tap: %s upstream failed: %s", route, error)
                 idle = route == "cloud" and isinstance(error, httpx.ReadTimeout)
                 if idle:
                     monitor.note_cloud_stall(_turn_of(self.headers.get(REQUEST_ID_HEADER)), int(_CLOUD_TIMEOUT.read))
