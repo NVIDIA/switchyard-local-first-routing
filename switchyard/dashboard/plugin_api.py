@@ -85,6 +85,7 @@ def _summary(cfg: Any) -> Dict[str, Any]:
         "default_preset": cfg.default_preset,
         "pin": cfg.pin,
         "bounded_local": cfg.bounded_local,
+        "subscription_consent": list(cfg.subscription_consent),
         "local": _tier_view("local", cfg.local),
         "cloud": _tier_view("cloud", cfg.cloud),
         "presets": [_preset_view(preset) for preset in cfg.presets],
@@ -156,7 +157,7 @@ def start() -> Dict[str, Any]:
     except sy_settings.SettingsError as error:
         return {"ok": False, "error": str(error)}
     ok = sidecar.ensure_running(cfg)
-    return {"ok": ok, "error": None if ok else f"see {sidecar.state_dir() / 'sidecar.log'}"}
+    return {"ok": ok, "error": None if ok else sidecar.consent_problem(cfg) or f"see {sidecar.state_dir() / 'sidecar.log'}"}
 
 
 @router.post("/dashboard")
@@ -213,6 +214,9 @@ class SetupBody(BaseModel):
     preset: Optional[PresetBody] = None
     # Turns on VGR's decision deadline and per-turn local budget; omitted keeps the saved value.
     bounded_local: Optional[bool] = None
+    # The user's agreement that Switchyard may call a tier's subscription sign-in on its own;
+    # omitted keeps the saved answer.
+    allow_subscription_use: Optional[bool] = None
 
 
 class SavePresetBody(PresetBody):
@@ -298,7 +302,7 @@ def _apply(cfg: Any, *, start: bool) -> Dict[str, Any]:
         "ok": True,
         "running": running,
         "config": _summary(cfg),
-        "error": None if running or not start else (
+        "error": None if running or not start else sidecar.consent_problem(cfg) or (
             f"Switchyard is configured but did not start; see {sidecar.state_dir() / 'sidecar.log'}"
         ),
     }
@@ -416,7 +420,7 @@ def _setup(body: SetupBody, progress: Callable[[str], None] = lambda step: None)
         updates["default_preset"] = name
     if body.bounded_local is not None:
         updates["bounded_local"] = body.bounded_local
-    cfg = _configure(updates, progress=progress)
+    cfg = _configure(updates, progress=progress, allow_subscription_use=body.allow_subscription_use)
     for key_env, api_key in keys.items():
         save_env_value_secure(key_env, api_key)
     progress("start")

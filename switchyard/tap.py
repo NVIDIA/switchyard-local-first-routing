@@ -9,9 +9,12 @@
 ``/monitor/*``  The live monitor state read by the dashboard.
 
 Front and monitor routes require the sidecar's bearer token. The tier routes
-carry whatever credential Switchyard attaches, except a tier served by a
-resolved endpoint (a Hermes provider, or Hermes's llama.cpp runtime), which gets
-that endpoint's own credential in place of anything Switchyard sent.
+require the tier-route key, which only Switchyard, inside the sidecar process,
+holds, and the single-use id of a front request still in flight, so a call made
+to Switchyard's own listener, which takes no key, reaches no tier. The tap
+replaces the key with the tier's own credential: its API key, or for a tier
+served by a resolved endpoint (a Hermes provider, or Hermes's llama.cpp
+runtime), that endpoint's credential.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import select
 import socket
 import sys
@@ -45,9 +49,11 @@ SESSION_HEADER = "x-switchyard-session-id"
 CLIENT_HEADER = "x-switchyard-client"
 HERMES_CLIENT = "hermes"
 _IMAGE_PARTS = frozenset({"image_url", "input_image", "image"})
-# Switchyard copies a request's correlation id onto every upstream call it makes
-# for that request, so the tap stamps each turn's id here.
+# Switchyard copies a request's x-request-id onto every upstream call it makes for that request,
+# and logs x-switchyard-request-id in its place: the tap sends the front request's single-use id
+# in the first, kept out of sidecar.log, and the turn's id in the second.
 REQUEST_ID_HEADER = "x-request-id"
+CORRELATION_HEADER = "x-switchyard-request-id"
 _TURN_PREFIX = "vgr-turn-"
 _HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
@@ -73,11 +79,12 @@ _STREAMED_RESPONSES_DELTAS = (".output_text.delta", ".reasoning_text.delta", ".r
 PresetResolver = Callable[[Any], Optional[Tuple[str, str]]]
 
 
-def _turn_of(request_id: Optional[str]) -> Optional[int]:
-    if request_id and request_id.startswith(_TURN_PREFIX):
-        suffix = request_id[len(_TURN_PREFIX):]
-        return int(suffix) if suffix.isdigit() else None
-    return None
+def _route_of(path: str) -> str:
+    return urlsplit(path).path.lstrip("/").split("/", 1)[0]
+
+
+def _matches(supplied: str, key: str) -> bool:
+    return bool(supplied and key) and hmac.compare_digest(supplied.encode(), key.encode())
 
 
 def _stall_message(seconds: int) -> str:
@@ -348,16 +355,20 @@ class TapServer(ThreadingHTTPServer):
         port: int,
         *,
         token: str,
+        tier_route_key: str,
         local_base_url: str,
         cloud_base_url: str,
         monitor: Monitor,
         presets: PresetResolver,
         on_shutdown: Optional[Callable[[], None]] = None,
         endpoints: Optional[Dict[str, EndpointResolver]] = None,
+        tier_credentials: Optional[Mapping[str, Mapping[str, str]]] = None,
         stream_only: Iterable[str] = (),
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.token = token
+        self.tier_route_key = tier_route_key
+        self.tier_credentials = dict(tier_credentials or {})
         self.monitor = monitor
         self.switchyard_url: Optional[str] = None
         self.on_shutdown = on_shutdown
@@ -369,6 +380,8 @@ class TapServer(ThreadingHTTPServer):
         self.stream_only = frozenset(stream_only)
         self.presets = presets
         self.drafts = _Drafts()
+        self._requests: Dict[str, Optional[int]] = {}  # in-flight front request id -> its turn id
+        self._requests_lock = threading.Lock()
         timeout = httpx.Timeout(connect=15.0, read=None, write=60.0, pool=None)
         self.client = httpx.Client(timeout=timeout)
         # A pooled connection is only reachable once its response headers arrive; a fresh one
@@ -393,15 +406,34 @@ class TapServer(ThreadingHTTPServer):
 
         return frozenset(pin_preset(tier).name for tier in PIN_TARGETS)
 
+    def open_request(self, turn_id: Optional[int]) -> str:
+        """A single-use id for one front request; its tier calls must carry it until :meth:`close_request`."""
+        request_id = secrets.token_urlsafe(32)
+        with self._requests_lock:
+            self._requests[request_id] = turn_id
+        return request_id
+
+    def close_request(self, request_id: str) -> None:
+        with self._requests_lock:
+            self._requests.pop(request_id, None)
+
+    def is_open(self, request_id: Optional[str]) -> bool:
+        with self._requests_lock:
+            return bool(request_id) and request_id in self._requests
+
+    def turn_of(self, request_id: Optional[str]) -> Optional[int]:
+        with self._requests_lock:
+            return self._requests.get(request_id) if request_id else None
+
     def resolve(self, path: str) -> Tuple[Optional[str], Optional[str], Optional[Dict[str, str]]]:
         """``(route, upstream URL, credential headers)`` for a request path; route is None when unknown.
 
         The upstream URL is None for the monitor routes and for a resolved tier that is down.
-        The headers are set only when the tap, not Switchyard, owns the tier's credential.
+        Tier routes always get headers: the tier's credential, sent in place of the caller's.
         """
         parts = urlsplit(path)
         segments = parts.path.lstrip("/").split("/", 1)
-        route, rest = segments[0], (segments[1] if len(segments) > 1 else "")
+        route, rest = _route_of(path), (segments[1] if len(segments) > 1 else "")
         query = f"?{parts.query}" if parts.query else ""
         if route == "front" and self.switchyard_url:
             return route, f"{self.switchyard_url}/{rest}{query}", None
@@ -416,7 +448,7 @@ class TapServer(ThreadingHTTPServer):
             base_url, credentials = endpoint
             return route, f"{base_url.rstrip('/')}/{rest}{query}", dict(credentials)
         if route in self.upstreams:
-            return route, f"{self.upstreams[route]}/{rest}{query}", None
+            return route, f"{self.upstreams[route]}/{rest}{query}", dict(self.tier_credentials.get(route, {}))
         if route == "monitor":
             return route, None, None
         return None, None, None
@@ -450,12 +482,13 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._trusted_origin():
             self._send_json(403, {"error": "forbidden"})
             return
+        # Checked before resolving, which for a provider tier asks Hermes for its credential.
+        if not self._authorized(_route_of(self.path)):
+            self._send_json(401, {"error": "unauthorized"})
+            return
         route, upstream, credentials = self.server.resolve(self.path)
         if route is None:
             self._send_json(404, {"error": "not found"})
-            return
-        if route in ("front", "monitor") and not self._authorized():
-            self._send_json(401, {"error": "unauthorized"})
             return
         if route == "monitor":
             self._serve_monitor(method)
@@ -478,10 +511,17 @@ class _Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("host") or "").rsplit(":", 1)[0].lower()
         return host in _LOOPBACK_HOSTS
 
-    def _authorized(self) -> bool:
-        supplied = self.headers.get("authorization", "")
-        scheme, _, credential = supplied.partition(" ")
-        return scheme.lower() == "bearer" and hmac.compare_digest(credential.strip(), self.server.token)
+    def _authorized(self, route: str) -> bool:
+        """Whether the request carries its route's key; an unknown route passes, to get its 404."""
+        scheme, _, credential = self.headers.get("authorization", "").partition(" ")
+        bearer = credential.strip() if scheme.lower() == "bearer" else ""
+        if route in ("front", "monitor"):
+            return _matches(bearer, self.server.token)
+        if route in self.server.upstreams:
+            # Switchyard sends the key the way the tier's API format does: x-api-key for Anthropic.
+            return (_matches(self.headers.get("x-api-key") or bearer, self.server.tier_route_key)
+                    and self.server.is_open(self.headers.get(REQUEST_ID_HEADER)))
+        return True
 
     def _serve_monitor(self, method: str) -> None:
         path = urlsplit(self.path).path
@@ -526,6 +566,7 @@ class _Handler(BaseHTTPRequestHandler):
         upstream_path = urlsplit(upstream).path
         is_completion = method == "POST" and upstream_path.endswith(_COMPLETION_PATHS)
         monitor = self.server.monitor
+        tier_turn = self.server.turn_of(self.headers.get(REQUEST_ID_HEADER)) if route != "front" else None
         preset = None
         if route == "front" and is_completion:
             selected = self.server.presets(body.get("model"))
@@ -544,13 +585,13 @@ class _Handler(BaseHTTPRequestHandler):
         turn_id = monitor.begin_turn(
             body, self.headers.get(SESSION_HEADER), preset, hermes_request_id=self.headers.get(HERMES_REQUEST_HEADER),
         ) if preset else None
-        stalled = monitor.cloud_stalled(_turn_of(self.headers.get(REQUEST_ID_HEADER))) if route == "cloud" else None
+        stalled = monitor.cloud_stalled(tier_turn) if route == "cloud" else None
         if stalled:
             # Switchyard retries a 502, and waiting out the idle limit again on each retry multiplies the stall.
             self._send_json(502, {"error": {"message": _stall_message(stalled)}})
             return
         call = (
-            monitor.begin_call(route, body, _turn_of(self.headers.get(REQUEST_ID_HEADER)))
+            monitor.begin_call(route, body, tier_turn)
             if route != "front" and is_completion else None
         )
         assemble = (
@@ -562,7 +603,7 @@ class _Handler(BaseHTTPRequestHandler):
             raw = json.dumps(body).encode()
         draft_key = None
         if call is not None and route == "local" and call["stage"] == stages.LOCAL_DRAFT and not assemble:
-            scope = monitor.request_scope(_turn_of(self.headers.get(REQUEST_ID_HEADER)))
+            scope = monitor.request_scope(tier_turn)
             draft_key = _Drafts.key(scope, body) if scope else None
             replay = self.server.drafts.get(draft_key) if draft_key else None
             if replay is not None:
@@ -571,16 +612,19 @@ class _Handler(BaseHTTPRequestHandler):
 
         headers = {
             k: v for k, v in self.headers.items()
-            if k.lower() not in _HOP_BY_HOP and k.lower() not in (REQUEST_ID_HEADER, HERMES_REQUEST_HEADER)
+            if k.lower() not in _HOP_BY_HOP
+            and k.lower() not in (REQUEST_ID_HEADER, CORRELATION_HEADER, HERMES_REQUEST_HEADER)
         }
         if route == "front" or credentials is not None:
             headers = {k: v for k, v in headers.items() if k.lower() not in _CREDENTIAL_HEADERS}
         headers.update(credentials or {})
+        request_id: Optional[str] = None
         if route == "front":
-            if turn_id is not None:
-                headers[REQUEST_ID_HEADER] = f"{_TURN_PREFIX}{turn_id}"
-        elif self.headers.get(REQUEST_ID_HEADER):
-            headers[REQUEST_ID_HEADER] = self.headers[REQUEST_ID_HEADER]
+            request_id = self.server.open_request(turn_id)
+            headers[REQUEST_ID_HEADER] = request_id
+            headers[CORRELATION_HEADER] = f"{_TURN_PREFIX}{turn_id}" if turn_id is not None else "vgr-request"
+        elif tier_turn is not None:
+            headers[REQUEST_ID_HEADER] = f"{_TURN_PREFIX}{tier_turn}"
         headers["accept-encoding"] = "identity"
         status, served_model, accumulator = 502, None, _Accumulator()
         no_credit: Optional[str] = None  # a tier's provider message refusing for lack of credit
@@ -697,7 +741,7 @@ class _Handler(BaseHTTPRequestHandler):
                 logger.warning("vgr tap: %s upstream failed: %s", route, error)
                 idle = route == "cloud" and isinstance(error, httpx.ReadTimeout)
                 if idle:
-                    monitor.note_cloud_stall(_turn_of(self.headers.get(REQUEST_ID_HEADER)), int(_CLOUD_TIMEOUT.read))
+                    monitor.note_cloud_stall(tier_turn, int(_CLOUD_TIMEOUT.read))
                 if headers_sent:
                     self.close_connection = True
                 else:
@@ -708,6 +752,8 @@ class _Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             status = status if delivered else CLIENT_CLOSED
         finally:
+            if request_id is not None:
+                self.server.close_request(request_id)
             hang_up.finish()
             close_call(status)
             if turn_id is not None:

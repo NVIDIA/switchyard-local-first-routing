@@ -25,8 +25,9 @@ commands and a Switchyard page in the dashboard and in Hermes Desktop.
   [`llama-server`](https://github.com/ggml-org/llama.cpp). VGR scores the local
   model's answers from them. Hermes's one-click llama.cpp setup works too.
 - **A cloud model**: any OpenAI- or Anthropic-compatible server, or a provider
-  you are signed in to in Hermes (`hermes auth`), such as OpenRouter, OpenAI
-  Codex or Nous Portal. A Claude Pro or Max login can't be routed.
+  you are signed in to in Hermes (`hermes auth`). Users can configure
+  Switchyard with third-party model providers. Each provider's terms and
+  conditions apply. A Claude Pro or Max login can't be routed.
 
 ## Install
 
@@ -83,6 +84,10 @@ signed in to with `hermes auth`. `--<tier>-key-env` names an environment
 variable; never pass a key on the command line. With no tier options, `setup`
 asks you to pick each model. `hermes switchyard setup --help` lists every option.
 
+A tier on a provider's subscription sign-in needs your agreement first: setup
+shows what Switchyard does with it and asks, the Desktop form adds a switch for
+it, and `--allow-subscription-use` agrees from a script. See [Subscription sign-ins](#subscription-sign-ins).
+
 Setup also sends Hermes's session titles and smart-approval checks straight to
 the local model (`switchyard/only-efficient`), since a VGR check can outlast
 Hermes's 30-second limit for both. Models you set yourself for those are kept.
@@ -111,6 +116,18 @@ without VGR checks, unless they include images or you chose
   commands and edits the local model already ran.
 - **If the cloud model fails**, the local model answers that step unchecked,
   and the Monitor shows **Local after cloud failure**.
+
+### Subscription sign-ins
+
+When a tier uses a subscription you signed in to in Hermes rather than an API
+key, Switchyard calls it on its own as it routes, including VGR's checks of the
+local model's answers, without asking you each time. Those calls count against
+the subscription's usage. Each provider's terms and conditions apply, and the
+provider can restrict your account, or Hermes's sign-in with it, for use its
+terms do not allow; check them before you agree. Setup records your agreement
+for each such provider, and the sidecar won't start on one you haven't agreed
+to. `hermes switchyard setup --no-allow-subscription-use` withdraws it, and
+`hermes switchyard pin local` keeps every request on the local model.
 
 ## What the plugin does on your machine
 
@@ -220,10 +237,11 @@ sidecar.
 Switchyard itself is the `nemo-switchyard` package from
 [Switchyard](https://github.com/NVIDIA-NeMo/Switchyard). VGR ships in it from 0.4.0,
 starting with the 0.4.0 alpha releases. The plugin declares it as a Python dependency
-(`nemo-switchyard>=0.4.0a1,<1` in `plugin.yaml`). Because that range names an alpha,
-Hermes's installer takes the alpha releases too, and the stable 0.4.0 once it ships.
-Hermes installs it from PyPI, together with the plugin, into Hermes's own Python
-environment. The plugin downloads nothing itself. The `runtime:` line of
+pinned to one release (`nemo-switchyard==0.4.0a1` in `plugin.yaml`). Hermes installs
+it from PyPI, together with the plugin, into Hermes's own Python environment. The
+plugin downloads nothing itself. Before the sidecar loads Switchyard, it checks every
+installed Switchyard file against the SHA-256 of the published 0.4.0a1 wheels, and
+does not start if any file differs, is missing or was added. The `runtime:` line of
 `hermes switchyard status` shows the package and version serving.
 
 ## Update or remove
@@ -249,7 +267,7 @@ cd hermes-agent
 cp -r ../<this repository>/switchyard plugins/switchyard
 cp -r ../<this repository>/switchyard/provider plugins/model-providers/switchyard
 python -m pm.build_env --source . --out .venv --group dev --group test
-uv pip install --python .venv/bin/python "nemo-switchyard>=0.4.0a1,<1"
+uv pip install --python .venv/bin/python "nemo-switchyard==0.4.0a1"
 .venv/bin/python -m pytest plugins/switchyard/tests
 ```
 
@@ -268,3 +286,7 @@ Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. Licensed under the Apache
 License, Version 2.0; see [LICENSE](LICENSE). The provider profile in
 `provider/` carries its own copy. `nemo-switchyard` carries its own license
 files.
+
+OpenAI, Anthropic and Claude are trademarks of their owners, named here only
+to say what the plugin works with. This plugin is
+not affiliated with, sponsored by or endorsed by them.

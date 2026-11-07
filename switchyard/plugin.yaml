@@ -4,11 +4,11 @@
 name: nvidia-switchyard
 label: "Switchyard Local-first Routing (Beta)"
 version: 0.1.0
-description: "Beta. With Switchyard Local-first Routing, Hermes routes between two models (a local and a cloud one by default; any URL or Hermes provider, Codex and Nous Portal subscriptions included) with Verification-Gated Routing, as named presets selectable as models. Runs Switchyard in a loopback sidecar."
+description: "Beta. With Switchyard Local-first Routing, Hermes routes between two models (a local and a cloud one by default; any URL or third-party provider set up in Hermes, under that provider's terms and conditions) with Verification-Gated Routing, as named presets selectable as models. Runs Switchyard in a loopback sidecar."
 author: NVIDIA
 license: Apache-2.0
 python_dependencies:
-  - nemo-switchyard>=0.4.0a1,<1
+  - nemo-switchyard==0.4.0a1
 provides_hooks:
   - pre_api_request
   - post_api_request

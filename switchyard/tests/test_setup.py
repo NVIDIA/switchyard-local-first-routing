@@ -65,7 +65,7 @@ def test_a_keyless_local_server_names_no_key_for_the_sidecar_to_require(client):
 
     cfg = sy_settings.load(sy_settings.plugin_settings(_config()))
     assert cfg.local.api_key_env == ""
-    sidecar._export_tier_keys(cfg)
+    assert "local" not in sidecar.tier_credentials(cfg)
 
 
 def test_session_titles_and_smart_approval_go_straight_to_the_local_tier(client):
@@ -692,11 +692,20 @@ def test_switching_a_tier_to_a_subscription_records_its_format_and_drops_the_url
         "provider": "openai-codex", "api_mode": "codex_responses",
         "base_url": "https://chatgpt.com/backend-api/codex", "api_key": "codex-oauth-sentinel",
     })
-    response = client.post("/setup", json={
+    before = _config()
+    body = {
         "local": {"source": "url", "base_url": "http://127.0.0.1:9931/v1", "model": "local-m"},
         "cloud": {"source": "provider", "provider": "openai-codex", "model": "gpt-5.5"},
-    })
+    }
+    unagreed = client.post("/setup", json=body)
+    assert unagreed.status_code == 400 and "count against your subscription" in unagreed.json()["detail"]
+    with pytest.raises(sy_settings.SettingsError):
+        sidecar.configure(body, make_default=True, confirm_subscription_use=lambda notice: False)
+    assert _config() == before
+
+    response = client.post("/setup", json={**body, "allow_subscription_use": True})
     assert response.status_code == 200, response.text
+    assert response.json()["config"]["subscription_consent"] == ["openai-codex"]
     saved = sy_settings.plugin_settings(_config())["cloud"]
     assert (saved["source"], saved["provider"], saved["format"], saved["base_url"]) == (
         "provider", "openai-codex", "openai_responses", None)

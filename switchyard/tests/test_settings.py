@@ -27,6 +27,20 @@ def test_provider_tier_takes_its_format_from_the_provider_and_has_no_url():
     assert "BIG_KEY" not in rendered and "openai-codex" not in rendered
 
 
+def test_only_subscription_tiers_the_user_has_not_agreed_to_block_routing():
+    from plugins.switchyard import sidecar
+
+    codex = {"source": "provider", "provider": "openai-codex", "model": "gpt-5.5"}
+    assert providers.unconsented(_load(cloud=codex)) == ["openai-codex"]
+    assert "--allow-subscription-use" in sidecar.startup_problem(_load(cloud=codex))
+    # Consent given under Hermes's alias for the provider covers it.
+    assert providers.unconsented(_load(cloud=codex, subscription_consent=["chatgpt"])) == []
+    assert providers.unconsented(_load(cloud={"source": "provider", "provider": "anthropic", "model": "m"})) == []
+    assert providers.unconsented(_load()) == []
+    with pytest.raises(sy_settings.SettingsError):
+        _load(subscription_consent="openai-codex")
+
+
 @pytest.mark.parametrize("cloud, extra_body", [
     ({"base_url": "https://gateway.example.com/v1", "model": "anthropic/claude-opus-5-5"},
      sy_settings.CLAUDE_EXTRA_BODY),

@@ -200,8 +200,44 @@ def running_toml(cfg: sy_settings.SwitchyardSettings) -> str:
     return sy_settings.render_switchyard_toml(cfg, omit=omit)
 
 
+def consent_problem(cfg: sy_settings.SwitchyardSettings) -> Optional[str]:
+    """Why ``cfg`` cannot route until the user agrees to the use of a subscription sign-in; None when it can."""
+    from . import providers
+
+    missing = providers.unconsented(cfg)
+    if not missing:
+        return None
+    return (f"{providers.subscription_notice(missing)} To agree, run `hermes switchyard setup --allow-subscription-use`, "
+            "or tick the agreement in the Switchyard panel's setup and save. Otherwise pick another model for that tier.")
+
+
+def _record_consent(cfg: sy_settings.SwitchyardSettings, updates: Dict[str, Any], allow: Optional[bool],
+                    confirm: Optional[Callable[[str], bool]]) -> sy_settings.SwitchyardSettings:
+    """``cfg`` with the user's answer on its subscription sign-ins; refuses one they have not agreed to,
+    except that a withdrawal is always saved (the sidecar then refuses to start)."""
+    from . import providers
+
+    consent = () if allow is False else cfg.subscription_consent
+    missing = [p for p in providers.unconsented(cfg) if p not in consent]
+    # Declining at the prompt refuses the setup; only an explicit withdrawal is saved without consent.
+    if missing and allow is None and confirm is not None and confirm(providers.subscription_notice(missing)):
+        allow = True
+    if missing and allow:
+        consent = (*consent, *missing)
+    if consent != cfg.subscription_consent:
+        updates[sy_settings.SUBSCRIPTION_CONSENT_KEY] = list(consent)
+        cfg = dataclasses.replace(cfg, subscription_consent=consent)
+    problem = consent_problem(cfg)
+    if problem and allow is not False:
+        raise sy_settings.SettingsError(problem)
+    return cfg
+
+
 def startup_problem(cfg: sy_settings.SwitchyardSettings) -> Optional[str]:
     """Why the sidecar cannot start with ``cfg`` here, as the user should read it; None when nothing is known."""
+    consent = consent_problem(cfg)
+    if consent:
+        return consent
     missing = [tier.api_key_env for tier in (cfg.local, cfg.cloud) if tier.source == "url" and tier.api_key_env
                and not _secret(tier.api_key_env)]
     if missing:
@@ -282,6 +318,8 @@ def configure(
     make_default: bool = True,
     remove_presets: Tuple[str, ...] = (),
     progress: Callable[[str], None] = lambda step: None,
+    allow_subscription_use: Optional[bool] = None,
+    confirm_subscription_use: Optional[Callable[[str], bool]] = None,
 ) -> sy_settings.SwitchyardSettings:
     """Apply ``updates`` to the plugin settings and, optionally, make Switchyard Hermes's model.
 
@@ -290,6 +328,10 @@ def configure(
     by Switchyard, before anything is written, so a rejected update leaves
     config.yaml untouched. ``progress`` is told "enable" before the plugin is
     first enabled and "save" before the settings are written.
+
+    A tier on a subscription sign-in needs the user's agreement: ``allow_subscription_use``
+    True gives it and False withdraws it; left None, ``confirm_subscription_use`` is shown
+    the notice and asked, and without it the saved answer stands.
     """
     from hermes_cli.config import save_env_value_secure, set_config_value
     from hermes_cli.plugins_cmd import dashboard_set_agent_plugin_enabled
@@ -315,6 +357,7 @@ def configure(
         updates["default_preset"] = None
     cfg = sy_settings.load(merged)
     cfg, keys = _resolve_provider_tiers(cfg, updates, merged)
+    cfg = _record_consent(cfg, updates, allow_subscription_use, confirm_subscription_use)
     check_routes(cfg)
     # Plugins are opt-in: without this, `hermes switchyard serve` (the sidecar) does not exist.
     if sy_settings.PLUGIN_ID not in ((_load_config().get("plugins") or {}).get("enabled") or ()):
@@ -575,20 +618,24 @@ def _write_private(path: Path, text: str) -> None:
         handle.write(text)
 
 
-def _export_tier_keys(cfg: sy_settings.SwitchyardSettings) -> None:
-    """Make each tier's credential visible to Switchyard's ``api_key_env`` lookup.
+def tier_credentials(cfg: sy_settings.SwitchyardSettings) -> Dict[str, Dict[str, str]]:
+    """The credential headers the tap sends to each URL tier that has a key, in that tier's format.
 
-    This runs only inside the dedicated sidecar process.
+    Switchyard never holds these; it calls the tap's tier routes with the tier-route key.
     """
     from agent.secret_scope import get_secret
 
-    for tier in (cfg.local, cfg.cloud):
+    credentials: Dict[str, Dict[str, str]] = {}
+    for name, tier in (("local", cfg.local), ("cloud", cfg.cloud)):
         if tier.source != "url" or not tier.api_key_env:
             continue
-        value = get_secret(tier.api_key_env)
+        value = (get_secret(tier.api_key_env) or "").strip()
         if not value:
             raise sy_settings.SettingsError(f"{tier.api_key_env} is not set; add it with `hermes config env`")
-        os.environ[tier.api_key_env] = value
+        credentials[name] = (
+            {"x-api-key": value} if tier.format == "anthropic_messages" else {"Authorization": f"Bearer {value}"}
+        )
+    return credentials
 
 
 def _managed_resolver():
@@ -781,10 +828,15 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
     from .runtime import describe, server_class
 
     cfg = cfg or load_settings()
+    consent = consent_problem(cfg)
+    if consent:
+        raise sy_settings.SettingsError(consent)
     token = get_token()
     if not token:
         raise sy_settings.SettingsError(f"{sy_settings.TOKEN_ENV} is not set; run `hermes switchyard setup`")
-    _export_tier_keys(cfg)
+    credentials = tier_credentials(cfg)
+    tier_route_key = secrets.token_urlsafe(32)
+    os.environ[sy_settings.TIER_ROUTE_KEY_ENV] = tier_route_key
     directory = state_dir()
     config_path = directory / "switchyard.toml"
     Server = server_class()
@@ -819,6 +871,8 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
         tap = TapServer(
             cfg.port,
             token=token,
+            tier_route_key=tier_route_key,
+            tier_credentials=credentials,
             local_base_url=cfg.local.base_url,
             cloud_base_url=cfg.cloud.upstream_url,
             monitor=monitor,

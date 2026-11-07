@@ -80,6 +80,35 @@ def _is_anthropic_oauth(key: str) -> bool:
     return key.startswith(("sk-ant-", "eyJ", "cc-"))
 
 
+def is_subscription(provider: str) -> bool:
+    """Whether Hermes reaches ``provider`` through a subscription sign-in (OAuth), not an API key."""
+    from hermes_cli.auth import PROVIDER_REGISTRY
+    from hermes_cli.models import normalize_provider
+
+    config = PROVIDER_REGISTRY.get(normalize_provider(provider))
+    return config is not None and str(config.auth_type).startswith("oauth")
+
+
+def _label(provider: str) -> str:
+    from hermes_cli.models import provider_label
+
+    return provider_label(provider)
+
+
+def unconsented(cfg: sy_settings.SwitchyardSettings) -> List[str]:
+    """The subscription sign-ins ``cfg``'s tiers use that the user has not agreed Switchyard may call."""
+    from hermes_cli.models import normalize_provider
+
+    found = [normalize_provider(tier.provider) for tier in (cfg.local, cfg.cloud)
+             if tier.source == "provider" and is_subscription(tier.provider)]
+    agreed = {normalize_provider(p) for p in cfg.subscription_consent}
+    return [p for p in dict.fromkeys(found) if p not in agreed]
+
+
+def subscription_notice(provider_ids: List[str]) -> str:
+    return sy_settings.subscription_notice([_label(p) for p in provider_ids])
+
+
 def credential_headers(runtime: Mapping[str, Any]) -> Dict[str, str]:
     """The headers that authenticate one call to ``runtime``'s endpoint."""
     key = str(runtime.get("api_key") or "").strip()
@@ -235,6 +264,8 @@ def hermes_models() -> Dict[str, Any]:
             "models": models,
             "default_model": pick_silent_default_model(models, provider=slug) or models[0],
         }
+        if option["source"] == "provider" and is_subscription(slug):
+            option["subscription_notice"] = subscription_notice([slug])
         options.append(option)
         if row.get("is_current") and context.current_model in models:
             current = {"provider": slug, "model": context.current_model}

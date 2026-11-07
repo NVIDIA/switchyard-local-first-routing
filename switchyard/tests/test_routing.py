@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import socket
 import threading
 import time
@@ -69,6 +70,7 @@ def vgr(monkeypatch, request):
         "local": local_tier,
         "cloud": cloud_tier,
         "presets": {"vgr": {"algorithm": "vgr"}},
+        "subscription_consent": ["openai-codex"],
     })
     thread = threading.Thread(target=sidecar.serve, args=(cfg,), daemon=True)
     thread.start()
@@ -493,3 +495,26 @@ def test_front_door_rejects_unauthenticated_and_browser_callers(vgr):
     }).status_code == 403
     assert httpx.get(f"{cfg.tap_url}/monitor/state").status_code == 401
     assert local.requests == []
+
+
+@pytest.mark.parametrize("vgr", [None, "provider"], indirect=True)
+def test_tier_routes_take_only_switchyards_key(vgr):
+    cfg, _, _, cloud = vgr
+    payload = {"model": cfg.cloud.model, "messages": [{"role": "user", "content": "hi"}]}
+    tier_route_key = os.environ[sy_settings.TIER_ROUTE_KEY_ENV]
+    for headers in ({}, {"Authorization": f"Bearer {TOKEN}"}, {"Authorization": "Bearer cloud-secret"},
+                    {"x-api-key": TOKEN},
+                    # Switchyard's key on a call that no front request in flight made: one sent to Switchyard directly.
+                    {"Authorization": f"Bearer {tier_route_key}"},
+                    {"Authorization": f"Bearer {tier_route_key}", "x-request-id": "vgr-turn-1"}):
+        assert httpx.post(f"{cfg.tap_url}/cloud/chat/completions", json=payload, headers=headers).status_code == 401
+    assert cloud.requests == []
+
+
+@pytest.mark.parametrize("vgr", [None, "provider"], indirect=True)
+def test_a_request_sent_to_switchyard_directly_reaches_no_tier(vgr):
+    _, _, local, cloud = vgr
+    switchyard_url = json.loads((sidecar.state_dir() / "sidecar.json").read_text())["switchyard"]
+    payload = {"model": sy_settings.pin_preset("cloud").model, "messages": [{"role": "user", "content": "hi"}]}
+    assert httpx.post(f"{switchyard_url}/v1/chat/completions", json=payload, timeout=60).status_code != 200
+    assert local.requests == [] and cloud.requests == []

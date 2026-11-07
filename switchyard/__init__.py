@@ -280,8 +280,8 @@ def _setup_parser(parser: argparse.ArgumentParser) -> None:
         "setup",
         help="Configure the two tiers and make Switchyard Hermes's model",
         description="The local tier is the efficient model and the cloud tier the capable one; either can be "
-        "a server URL, a Hermes provider (API key or a subscription such as Codex or Nous Portal), "
-        "or Hermes's own llama.cpp runtime. With no tier flags, each tier is picked from the models "
+        "a server URL, a third-party provider you set up in Hermes (with an API key or a subscription "
+        "sign-in; each provider's terms and conditions apply), or Hermes's own llama.cpp runtime. With no tier flags, each tier is picked from the models "
         "Hermes already has (without a terminal, an unconfigured efficient tier takes a local model).",
     )
     for name in ("local", "cloud"):
@@ -291,7 +291,7 @@ def _setup_parser(parser: argparse.ArgumentParser) -> None:
         setup.add_argument(f"--{name}-key-env", help=f"Env var holding the {name} URL's API key, if it needs one")
         setup.add_argument(
             f"--{name}-provider",
-            help=f"Use a Hermes provider for the {name} tier (e.g. openai-codex, nous, openrouter); "
+            help=f"Use a Hermes provider for the {name} tier (a provider id that `hermes auth list` shows); "
             "its credentials come from `hermes auth`",
         )
         setup.add_argument(f"--{name}-format", choices=sy_settings.FORMATS, help=f"Wire format of the {name} tier")
@@ -308,6 +308,11 @@ def _setup_parser(parser: argparse.ArgumentParser) -> None:
         "--bounded-local", action=argparse.BooleanOptionalAction,
         help="Turn on (or, with --no-bounded-local, back off) VGR's time limits on local work: 300 s per "
         "request and 600 s per message (default: keep the saved setting)",
+    )
+    setup.add_argument(
+        "--allow-subscription-use", action=argparse.BooleanOptionalAction,
+        help="Agree that Switchyard may call a tier's subscription sign-in on its own as it routes, counting against that subscription's usage; --no-allow-subscription-use withdraws "
+        "the agreement (default: ask in a terminal, else keep the saved answer)",
     )
 
     sub.add_parser("list", help="List presets and the routing algorithms Switchyard offers")
@@ -389,7 +394,8 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     current = sy_settings.plugin_settings(sidecar._load_config())
     if not _tier_flags_given(args):
         # A run that only changes a setting keeps the tiers instead of asking for them again.
-        interactive = not updates and sys.stdin.isatty() and sys.stdout.isatty()
+        interactive = (not updates and getattr(args, "allow_subscription_use", None) is None
+                       and sys.stdin.isatty() and sys.stdout.isatty())
         updates.update(_hermes_tier_updates(dict(current), interactive=interactive))
     for name in ("local", "cloud"):
         source = _tier_source(args, name)
@@ -413,11 +419,28 @@ def _cmd_setup(args: argparse.Namespace) -> int:
         options = existing.get("options") if existing.get("algorithm") == algorithm else None
         updates["presets"] = {name: {"algorithm": algorithm, **({"options": options} if options else {})}}
         updates["default_preset"] = name
+    confirm = None
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        def confirm(notice: str) -> bool:
+            from hermes_cli.setup import prompt_choice
+
+            # Hermes's menu, as the tier pickers use: its line prompt can read no input on Windows.
+            print(notice)
+            return prompt_choice("Allow Switchyard to use it this way?", ["Yes, allow it", "No"], 1,
+                                 description=notice) == 0
     try:
-        cfg = sidecar.configure(updates, make_default=not args.no_default)
+        cfg = sidecar.configure(
+            updates, make_default=not args.no_default,
+            allow_subscription_use=getattr(args, "allow_subscription_use", None), confirm_subscription_use=confirm,
+        )
     except sy_settings.SettingsError as error:
         print(f"{sy_settings.PRODUCT_NAME} settings incomplete: {error}")
         return 1
+    if sidecar.consent_problem(cfg):
+        sidecar.stop(cfg)
+        print(f"Withdrew the agreement. {sy_settings.PRODUCT_NAME} is stopped and won't start until you agree "
+              "again or pick another model for the subscription tier.")
+        return 0
     preset = cfg.default
     print(f"{sy_settings.PRODUCT_LABEL} configured: local {cfg.local.model}, cloud {cfg.cloud.model}; "
           f"default preset {preset.name} ({sy_settings.ALGORITHMS[preset.algorithm].label}).")

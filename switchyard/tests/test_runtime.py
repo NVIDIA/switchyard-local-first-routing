@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from plugins.switchyard import runtime
@@ -40,6 +42,36 @@ def test_vgr_route_names_follow_the_loaded_build_once_its_environment_is_gone(mo
     upstream = runtime.uses_upstream_names()
     monkeypatch.setattr(runtime, "installed", lambda: None)
     assert runtime.uses_upstream_names() is upstream
+
+
+def test_only_the_published_release_files_pass(tmp_path):
+    for package in runtime._PACKAGES:
+        shutil.copytree(runtime._site() / package, tmp_path / package,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+    assert runtime.unverified(tmp_path) is None
+    server = tmp_path / "switchyard_rust" / "server.py"
+    original = server.read_bytes()
+    server.write_bytes(original + b"\n")
+    assert runtime.unverified(tmp_path) == "switchyard_rust/server.py differs from the release"
+    server.write_bytes(original)
+    # A version-tagged extension module would load ahead of the release's abi3 one.
+    shadow = tmp_path / "switchyard_rust" / "_switchyard_rust.cpython-314-x86_64-linux-gnu.so"
+    shadow.write_bytes(b"")
+    assert runtime.unverified(tmp_path) == f"{shadow.relative_to(tmp_path).as_posix()} is not in the release"
+    shadow.unlink()
+    server.unlink()
+    assert runtime.unverified(tmp_path) == "switchyard_rust/server.py is missing"
+
+
+def test_a_build_that_is_not_the_pinned_release_is_not_loaded(monkeypatch):
+    monkeypatch.setattr(runtime, "installed", lambda: ("nemo-switchyard", "0.4.0"))
+    with pytest.raises(runtime.RuntimeMissing, match="pinned to 0.4.0a1"):
+        runtime.select()
+    monkeypatch.setattr(runtime, "installed", lambda: ("nemo-switchyard", "0.4.0a1"))
+    monkeypatch.setattr(runtime, "unverified", lambda site: "switchyard_rust/server.py differs from the release")
+    with pytest.raises(runtime.RuntimeMissing, match="not the published release: switchyard_rust/server.py differs"):
+        runtime.select()
+    assert runtime.describe() is None
 
 
 def test_a_missing_build_names_the_reinstall(monkeypatch):

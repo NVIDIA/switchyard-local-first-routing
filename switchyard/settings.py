@@ -34,6 +34,8 @@ MODEL_PREFIX = "switchyard/"
 # Resolved by the sidecar to whichever preset is the default when the request arrives.
 DEFAULT_MODEL = f"{MODEL_PREFIX}default"
 TOKEN_ENV = "SWITCHYARD_API_KEY"
+# Set only inside the sidecar process: the key Switchyard sends on its calls to the tap's tier routes.
+TIER_ROUTE_KEY_ENV = "SWITCHYARD_TIER_ROUTE_KEY"
 DEFAULT_PORT = 4110
 TIERS = ("local", "cloud")
 # What each tier does in a route, for display; the config keys stay ``local`` and ``cloud``.
@@ -76,6 +78,9 @@ TITLE_TIMEOUT_KEY = "title_timeout"
 # and writes them at startup.
 HERMES_SETTINGS_KEY = "hermes_settings"
 HERMES_SETTINGS_REVISION = 4
+# Plugin setting listing the Hermes providers whose subscription sign-in the user agreed
+# Switchyard may call on its own as it routes.
+SUBSCRIPTION_CONSENT_KEY = "subscription_consent"
 MAX_RETRIES = 2
 DEFAULT_CLOUD_URL = "https://api.anthropic.com"
 DEFAULT_CLOUD_MODEL = "claude-opus-5-5"
@@ -310,6 +315,7 @@ class SwitchyardSettings:
     # "" routes with the selected preset; "local" or "cloud" sends every request to that tier.
     pin: str = ""
     bounded_local: bool = False
+    subscription_consent: Tuple[str, ...] = ()
 
     @property
     def front_base_url(self) -> str:
@@ -481,6 +487,26 @@ def _flag(name: str, value: Any) -> bool:
     return value
 
 
+def _consent(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)) or not all(isinstance(p, str) and _PROVIDER_ID.match(p) for p in value):
+        raise SettingsError(f"switchyard.{SUBSCRIPTION_CONSENT_KEY} must be a list of Hermes provider ids")
+    return tuple(dict.fromkeys(value))
+
+
+def subscription_notice(names: List[str]) -> str:
+    """What the user agrees to before Switchyard may call the subscription sign-ins ``names``."""
+    one = len(names) == 1
+    return (
+        f"{' and '.join(names)} {'is a subscription sign-in' if one else 'are subscription sign-ins'}. "
+        f"{PRODUCT_NAME} calls {'it' if one else 'them'} on its own as it routes, including the checks of the "
+        "efficient model's answers, without asking you each time. Those calls count against your subscription's "
+        "usage. The provider can restrict your account, or Hermes's sign-in with it, for use its terms do not "
+        "allow. `hermes switchyard pin local` keeps every request on the local model."
+    )
+
+
 def _preset(name: str, raw: Any, bounded_local: bool = False) -> Preset:
     reserved = name == "default" or name.startswith(PIN_PRESET_PREFIX) or f"{MODEL_PREFIX}{name}" in PIN_MODELS
     if not _PRESET_NAME.match(name) or reserved:
@@ -612,6 +638,7 @@ def load(raw: Mapping[str, Any]) -> SwitchyardSettings:
         presets=presets,
         pin=parse_pin(raw.get("pin")),
         bounded_local=bounded_local,
+        subscription_consent=_consent(raw.get(SUBSCRIPTION_CONSENT_KEY)),
     )
 
 
@@ -672,6 +699,9 @@ def render_switchyard_toml(settings: SwitchyardSettings, *, with_credentials: bo
                            upstream_names: Optional[bool] = None, omit: frozenset = frozenset()) -> str:
     """The Switchyard deployment: both tiers through the tap, one route per preset.
 
+    Both tiers authenticate to the tap with the sidecar's tier-route key; the tap, not
+    Switchyard, holds each tier's own credential.
+
     ``upstream_names`` spells VGR routes the way upstream Switchyard reads them; by default,
     whichever way the installed build does. ``omit`` names :data:`OPTIONAL_ROUTE_DEFAULTS`
     the installed Switchyard does not read.
@@ -688,8 +718,8 @@ def render_switchyard_toml(settings: SwitchyardSettings, *, with_credentials: bo
             f"base_url = {_toml_value(f'{settings.tap_url}/{name}')}",
             f"max_retries = {MAX_RETRIES}",
         ]
-        if with_credentials and tier.source == "url" and tier.api_key_env:
-            lines.append(f"api_key_env = {_toml_value(tier.api_key_env)}")
+        if with_credentials:
+            lines.append(f"api_key_env = {_toml_value(TIER_ROUTE_KEY_ENV)}")
         lines.append("")
     for name, tier in (("local", settings.local), ("cloud", settings.cloud)):
         target: Dict[str, Any] = {"id": tier.model, "llm_client": name}
