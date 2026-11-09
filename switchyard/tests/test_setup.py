@@ -699,7 +699,8 @@ def test_switching_a_tier_to_a_subscription_records_its_format_and_drops_the_url
     }
     unagreed = client.post("/setup", json=body)
     assert unagreed.status_code == 400 and "count against your subscription" in unagreed.json()["detail"]
-    with pytest.raises(sy_settings.SettingsError):
+    # Nothing was saved, so the bare flag would keep the old tier.
+    with pytest.raises(sy_settings.ConsentRequired, match="same `hermes switchyard setup` command"):
         sidecar.configure(body, make_default=True, confirm_subscription_use=lambda notice: False)
     assert _config() == before
 

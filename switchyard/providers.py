@@ -109,6 +109,10 @@ def subscription_notice(provider_ids: List[str]) -> str:
     return sy_settings.subscription_notice([_label(p) for p in provider_ids])
 
 
+def subscription_refusal(provider_ids: List[str]) -> str:
+    return sy_settings.subscription_refusal([_label(p) for p in provider_ids])
+
+
 def credential_headers(runtime: Mapping[str, Any]) -> Dict[str, str]:
     """The headers that authenticate one call to ``runtime``'s endpoint."""
     key = str(runtime.get("api_key") or "").strip()

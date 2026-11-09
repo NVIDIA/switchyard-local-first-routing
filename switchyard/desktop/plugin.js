@@ -537,19 +537,21 @@ function setupReady({ chosen, cloud, keepsDefault, local }) {
   return tierReady(local) && tierReady(cloud) && isAvailable(chosen) && (!chosen || chosen.guided || keepsDefault)
 }
 
-// The notices of the subscription sign-ins the tiers use that the user has not yet agreed Switchyard may call.
-function subscriptionNotices({ cloud, consent, hermes, local }) {
+// The notices of the subscription sign-ins the tiers use, and whether the user has yet to agree to one.
+function subscriptionUse({ cloud, consent, hermes, local }) {
   const agreed = new Set(consent || [])
-  const notices = [local, cloud]
-    .filter(d => d.source === 'hermes' && !agreed.has(d.provider))
-    .map(d => hermesOption(hermes, d.provider))
-    .filter(o => o && o.subscription_notice)
-    .map(o => o.subscription_notice)
+  const used = [local, cloud]
+    .filter(d => d.source === 'hermes')
+    .map(d => ({ agreed: agreed.has(d.provider), option: hermesOption(hermes, d.provider) }))
+    .filter(u => u.option && u.option.subscription_notice)
 
-  return [...new Set(notices)]
+  return {
+    notices: [...new Set(used.map(u => u.option.subscription_notice))],
+    pending: used.some(u => !u.agreed)
+  }
 }
 
-function setupRequest({ agreed, algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local }) {
+function setupRequest({ allowSubscription, algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local }) {
   return {
     body: {
       local: tierBody(local, hermes),
@@ -557,7 +559,7 @@ function setupRequest({ agreed, algorithm, bounded, chosen, cloud, defaultPreset
       preset_name: keepsDefault ? defaultPreset.name : algorithm,
       preset: { algorithm, options: {} },
       bounded_local: bounded,
-      ...(agreed ? { allow_subscription_use: true } : {})
+      ...(allowSubscription === undefined ? {} : { allow_subscription_use: allowSubscription })
     },
     label: chosen ? chosen.label : algorithm,
     managed: local.source === 'managed' || cloud.source === 'managed'
@@ -668,8 +670,8 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
   const [cloud, setCloud] = useState(() => tierDraft('cloud', current.cloud, hermes))
   const [algorithm, setAlgorithm] = useState(() => initialAlgorithm(algorithms, defaultPreset))
   const [bounded, setBounded] = useState(Boolean(current.bounded_local))
-  // The notices the user agreed to; picking another subscription asks again.
-  const [agreedTo, setAgreedTo] = useState('')
+  // The user's answer and the notices it answers; picking another subscription asks again.
+  const [answer, setAnswer] = useState(null)
   const save = useSetupRun(() => {
     setLocal(d => ({ ...d, api_key: '' }))
     setCloud(d => ({ ...d, api_key: '' }))
@@ -679,10 +681,11 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
   const chosen = algorithms.find(a => a.name === algorithm)
   // Keeping the default preset's algorithm keeps that preset (and its route settings).
   const keepsDefault = Boolean(defaultPreset && defaultPreset.algorithm === algorithm)
-  const notices = subscriptionNotices({ cloud, consent: current.subscription_consent, hermes, local })
-  const noticeText = notices.join(' ')
-  const agreed = notices.length > 0 && agreedTo === noticeText
-  const canSave = setupReady({ chosen, cloud, keepsDefault, local }) && (!notices.length || agreed)
+  const subscription = subscriptionUse({ cloud, consent: current.subscription_consent, hermes, local })
+  const noticeText = subscription.notices.join(' ')
+  const allowed = answer && answer.text === noticeText ? answer.value : !subscription.pending
+  const canSave = setupReady({ chosen, cloud, keepsDefault, local }) && (!subscription.pending || allowed)
+  const allowSubscription = subscription.notices.length ? allowed : undefined
 
   const submit = async () => {
     if (!canSave || busy) {
@@ -690,7 +693,7 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
     }
 
     await save.run(
-      setupRequest({ agreed, algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local })
+      setupRequest({ allowSubscription, algorithm, bounded, chosen, cloud, defaultPreset, hermes, keepsDefault, local })
     )
   }
 
@@ -740,13 +743,16 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
       label: 'Bound local thinking time',
       onChange: setBounded
     }),
-    notices.length
+    subscription.notices.length
       ? h(ToggleRow, {
-          checked: agreed,
-          description: noticeText,
+          checked: allowed,
+          description: subscription.pending
+            ? noticeText
+            : `${noticeText} Turn this off and save to withdraw your agreement; Switchyard then refuses ` +
+              'every request until you agree again.',
           disabled: busy,
           label: 'Allow Switchyard to use this subscription',
-          onChange: value => setAgreedTo(value ? noticeText : '')
+          onChange: value => setAnswer({ text: noticeText, value })
         })
       : null,
     h(SetupProgress, { percent: save.percent, status: save.status }),

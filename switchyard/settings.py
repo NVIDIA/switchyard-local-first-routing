@@ -81,6 +81,8 @@ HERMES_SETTINGS_REVISION = 4
 # Plugin setting listing the Hermes providers whose subscription sign-in the user agreed
 # Switchyard may call on its own as it routes.
 SUBSCRIPTION_CONSENT_KEY = "subscription_consent"
+# The error code a sidecar without that agreement answers each request with.
+CONSENT_ERROR_CODE = "switchyard_subscription_consent_required"
 MAX_RETRIES = 2
 DEFAULT_CLOUD_URL = "https://api.anthropic.com"
 DEFAULT_CLOUD_MODEL = "claude-opus-5-5"
@@ -224,6 +226,10 @@ DEFAULTS: dict = {
 
 class SettingsError(ValueError):
     """The ``switchyard`` settings cannot produce a valid deployment."""
+
+
+class ConsentRequired(SettingsError):
+    """A tier uses a subscription sign-in the user has not agreed Switchyard may call."""
 
 
 def upstream_root(fmt: str, base_url: str) -> str:
@@ -504,6 +510,16 @@ def subscription_notice(names: List[str]) -> str:
         "efficient model's answers, without asking you each time. Those calls count against your subscription's "
         "usage. The provider can restrict your account, or Hermes's sign-in with it, for use its terms do not "
         "allow. `hermes switchyard pin local` keeps every request on the local model."
+    )
+
+
+def subscription_refusal(names: List[str]) -> str:
+    """The answer a sidecar without the user's agreement gives each request, short enough that Hermes
+    shows all of it (it keeps 300 characters of an error)."""
+    return (
+        f"You have not agreed that Switchyard may call {' and '.join(names)} on its own as it routes, so it "
+        "routed nothing. Run `hermes switchyard setup --allow-subscription-use` to agree, or pick another "
+        "model for that tier."
     )
 
 

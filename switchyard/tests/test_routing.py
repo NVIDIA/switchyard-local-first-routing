@@ -87,6 +87,48 @@ def vgr(monkeypatch, request):
     cloud.stop()
 
 
+def test_without_the_users_agreement_each_request_ends_at_once_with_the_reason(monkeypatch):
+    import plugins.switchyard as plugin
+
+    monkeypatch.setenv(sy_settings.TOKEN_ENV, TOKEN)
+    monkeypatch.setattr(sidecar, "spawn_detached", lambda *_, **__: pytest.fail("a refusing sidecar was replaced"))
+    raw = {
+        "port": _free_port(),
+        "local": {"base_url": f"http://127.0.0.1:{_free_port()}/v1", "model": "mock/local"},
+        "cloud": {"source": "provider", "provider": "openai-codex", "model": "mock/cloud",
+                  "format": "openai_responses"},
+        "presets": {"vgr": {"algorithm": "vgr"}},
+    }
+    cfg = sy_settings.load(raw)
+    saved = [cfg]
+    monkeypatch.setattr(sidecar, "load_settings", lambda: saved[0])
+    thread = threading.Thread(target=sidecar.serve, args=(cfg,), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 15
+    while not sidecar.refusing(cfg):
+        assert time.monotonic() < deadline, "sidecar did not start"
+        time.sleep(0.1)
+    assert not sidecar.ensure_running(cfg)
+
+    with httpx.Client(base_url=cfg.front_base_url, timeout=10) as client:
+        assert client.post("/chat/completions", json={}).status_code == 401
+        client.headers["Authorization"] = f"Bearer {TOKEN}"
+        response = _ask(client, "What is 2+2?")
+    assert response.status_code == 403
+    error = response.json()["error"]
+    # Hermes shows the first 300 characters of the message.
+    assert len(error["message"]) <= 300 and "--allow-subscription-use" in error["message"]
+    verdict = plugin._on_api_error_classification(
+        provider=sy_settings.PROVIDER, status_code=403, error_body=response.json())
+    assert verdict["retryable"] is False and not verdict["should_fallback"]
+    assert not verdict["should_rotate_credential"]
+    assert plugin._on_api_error_classification(provider="openai-codex", status_code=403, error_body=response.json()) is None
+
+    saved[0] = sy_settings.load({**raw, "subscription_consent": ["openai-codex"]})
+    thread.join(timeout=10)
+    assert not thread.is_alive() and not sidecar.refusing(cfg)
+
+
 CLOUD_ONLY = next(model for model, tier in sy_settings.PIN_MODELS.items() if tier == "cloud")
 CLOUD_PIN = sy_settings.pin_preset("cloud").name
 

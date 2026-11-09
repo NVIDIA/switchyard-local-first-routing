@@ -125,8 +125,9 @@ local model's answers, without asking you each time. Those calls count against
 the subscription's usage. Each provider's terms and conditions apply, and the
 provider can restrict your account, or Hermes's sign-in with it, for use its
 terms do not allow; check them before you agree. Setup records your agreement
-for each such provider, and the sidecar won't start on one you haven't agreed
-to. `hermes switchyard setup --no-allow-subscription-use` withdraws it, and
+for each such provider. Without it, the sidecar calls no model: each chat ends
+at once with the reason. To withdraw it, turn off the agreement in the Desktop
+form and save, or run `hermes switchyard setup --no-allow-subscription-use`.
 `hermes switchyard pin local` keeps every request on the local model.
 
 ## What the plugin does on your machine

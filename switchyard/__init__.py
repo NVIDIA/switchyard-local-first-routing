@@ -149,12 +149,37 @@ def _on_pre_api_request(provider: Any = None, base_url: Any = None, **_: Any) ->
 
         try:
             if not sidecar.ensure_running():
-                logger.warning("Switchyard sidecar did not come up; see %s", sidecar.state_dir() / "sidecar.log")
+                cfg = sidecar.load_settings()
+                if sidecar.refusing(cfg):
+                    _warn_refusal(sidecar.consent_problem(cfg))
+                else:
+                    logger.warning("Switchyard sidecar did not come up; see %s", sidecar.state_dir() / "sidecar.log")
                 return
         except sy_settings.SettingsError as error:
             logger.warning("Switchyard is not configured: %s (run `hermes switchyard setup`)", error)
             return
         _health_checked_at = time.monotonic()
+
+
+_refusal_logged: Optional[str] = None
+
+
+def _warn_refusal(problem: Optional[str]) -> None:
+    global _refusal_logged
+    if problem and problem != _refusal_logged:
+        _refusal_logged = problem
+        logger.warning("Switchyard refuses every request: %s", problem)
+
+
+def _on_api_error_classification(provider: Any = None, status_code: Any = None, error_code: Any = None,
+                                 error_body: Any = None, **_: Any) -> Optional[Dict[str, Any]]:
+    """End the turn on a refusing sidecar's answer: retrying, rotating the key or falling back changes nothing."""
+    body_error = error_body.get("error") if isinstance(error_body, dict) else None
+    code = error_code or (body_error.get("code") if isinstance(body_error, dict) else None)
+    if str(provider or "") != sy_settings.PROVIDER or status_code != 403 or code != sy_settings.CONSENT_ERROR_CODE:
+        return None
+    return {"reason": "unknown", "retryable": False, "should_compress": False,
+            "should_rotate_credential": False, "should_fallback": False}
 
 
 def _fetch_state() -> Optional[Dict[str, Any]]:
@@ -433,13 +458,16 @@ def _cmd_setup(args: argparse.Namespace) -> int:
             updates, make_default=not args.no_default,
             allow_subscription_use=getattr(args, "allow_subscription_use", None), confirm_subscription_use=confirm,
         )
+    except sy_settings.ConsentRequired as error:
+        print(f"{error}\nNothing was saved.")
+        return 1
     except sy_settings.SettingsError as error:
         print(f"{sy_settings.PRODUCT_NAME} settings incomplete: {error}")
         return 1
     if sidecar.consent_problem(cfg):
         sidecar.stop(cfg)
-        print(f"Withdrew the agreement. {sy_settings.PRODUCT_NAME} is stopped and won't start until you agree "
-              "again or pick another model for the subscription tier.")
+        print(f"Withdrew the agreement. {sy_settings.PRODUCT_NAME} now refuses every request, with the reason, "
+              "until you agree again or pick another model for the subscription tier.")
         return 0
     preset = cfg.default
     print(f"{sy_settings.PRODUCT_LABEL} configured: local {cfg.local.model}, cloud {cfg.cloud.model}; "
@@ -540,8 +568,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps(state, indent=2))
         return 0 if state else 1
     if not state:
-        print(f"{sy_settings.PRODUCT_LABEL} sidecar is not running on {cfg.tap_url}.")
         problem = sidecar.startup_problem(cfg)
+        if problem and sidecar.refusing(cfg):
+            print(f"{sy_settings.PRODUCT_LABEL} sidecar on {cfg.tap_url} refuses every request.\n  {problem}")
+            return 1
+        print(f"{sy_settings.PRODUCT_LABEL} sidecar is not running on {cfg.tap_url}.")
         if problem:
             print(f"  It cannot start: {problem}")
         return 1
@@ -686,9 +717,13 @@ def _handle(args: argparse.Namespace) -> int:
             if ok:
                 print(f"{sy_settings.PRODUCT_LABEL} sidecar running.")
                 return 0
-            problem = sidecar.startup_problem(sidecar.load_settings())
-            print(f"{sy_settings.PRODUCT_LABEL} sidecar failed to start: {problem}" if problem
-                  else f"{sy_settings.PRODUCT_LABEL} sidecar failed to start; see {sidecar.state_dir() / 'sidecar.log'}")
+            cfg = sidecar.load_settings()
+            problem = sidecar.startup_problem(cfg)
+            if problem and sidecar.refusing(cfg):
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar refuses every request: {problem}")
+            else:
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar failed to start: {problem}" if problem
+                      else f"{sy_settings.PRODUCT_LABEL} sidecar failed to start; see {sidecar.state_dir() / 'sidecar.log'}")
             return 1
         if command == "stop":
             return 0 if sidecar.stop() else 1
@@ -831,6 +866,10 @@ def register(ctx) -> None:
     )
     ctx.register_hook("pre_api_request", _on_pre_api_request)
     ctx.register_hook("post_api_request", _on_post_api_request)
+    from hermes_cli.plugins import VALID_HOOKS
+
+    if "transform_api_error_classification" in VALID_HOOKS:
+        ctx.register_hook("transform_api_error_classification", _on_api_error_classification)
     # A Hermes without request middleware sends no x-initiator; Switchyard then reads the message shape.
     # Nor could it keep route markers away from the model, so its chats get none.
     if callable(getattr(ctx, "register_middleware", None)):

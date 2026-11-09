@@ -14,5 +14,6 @@ provides_hooks:
   - post_api_request
   - pre_llm_call
   - transform_llm_output
+  - transform_api_error_classification
 provides_middleware:
   - llm_request

@@ -200,21 +200,34 @@ def running_toml(cfg: sy_settings.SwitchyardSettings) -> str:
     return sy_settings.render_switchyard_toml(cfg, omit=omit)
 
 
-def consent_problem(cfg: sy_settings.SwitchyardSettings) -> Optional[str]:
-    """Why ``cfg`` cannot route until the user agrees to the use of a subscription sign-in; None when it can."""
+def consent_problem(cfg: sy_settings.SwitchyardSettings, *, saved: bool = True) -> Optional[str]:
+    """Why ``cfg`` cannot route until the user agrees to the use of a subscription sign-in; None when it can.
+
+    ``saved`` is False for a setup that was refused, so saved nothing for the flag alone to agree to.
+    """
     from . import providers
 
     missing = providers.unconsented(cfg)
     if not missing:
         return None
-    return (f"{providers.subscription_notice(missing)} To agree, run `hermes switchyard setup --allow-subscription-use`, "
-            "or tick the agreement in the Switchyard panel's setup and save. Otherwise pick another model for that tier.")
+    agree = ("run `hermes switchyard setup --allow-subscription-use`" if saved
+             else "run the same `hermes switchyard setup` command again with `--allow-subscription-use` added")
+    return (f"{providers.subscription_notice(missing)} To agree, {agree}, or turn on the agreement in the "
+            "Switchyard panel's setup and save. Otherwise pick another model for that tier.")
+
+
+def consent_refusal(cfg: sy_settings.SwitchyardSettings) -> Optional[str]:
+    """The short form of :func:`consent_problem` a refusing sidecar answers each request with."""
+    from . import providers
+
+    missing = providers.unconsented(cfg)
+    return providers.subscription_refusal(missing) if missing else None
 
 
 def _record_consent(cfg: sy_settings.SwitchyardSettings, updates: Dict[str, Any], allow: Optional[bool],
                     confirm: Optional[Callable[[str], bool]]) -> sy_settings.SwitchyardSettings:
     """``cfg`` with the user's answer on its subscription sign-ins; refuses one they have not agreed to,
-    except that a withdrawal is always saved (the sidecar then refuses to start)."""
+    except that a withdrawal is always saved (the sidecar then refuses every request)."""
     from . import providers
 
     consent = () if allow is False else cfg.subscription_consent
@@ -227,9 +240,9 @@ def _record_consent(cfg: sy_settings.SwitchyardSettings, updates: Dict[str, Any]
     if consent != cfg.subscription_consent:
         updates[sy_settings.SUBSCRIPTION_CONSENT_KEY] = list(consent)
         cfg = dataclasses.replace(cfg, subscription_consent=consent)
-    problem = consent_problem(cfg)
+    problem = consent_problem(cfg, saved=False)
     if problem and allow is not False:
-        raise sy_settings.SettingsError(problem)
+        raise sy_settings.ConsentRequired(problem)
     return cfg
 
 
@@ -828,12 +841,12 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
     from .runtime import describe, server_class
 
     cfg = cfg or load_settings()
-    consent = consent_problem(cfg)
-    if consent:
-        raise sy_settings.SettingsError(consent)
     token = get_token()
     if not token:
         raise sy_settings.SettingsError(f"{sy_settings.TOKEN_ENV} is not set; run `hermes switchyard setup`")
+    refusal = consent_refusal(cfg)
+    if refusal:
+        return _serve_refusal(cfg, token, refusal)
     credentials = tier_credentials(cfg)
     tier_route_key = secrets.token_urlsafe(32)
     os.environ[sy_settings.TIER_ROUTE_KEY_ENV] = tier_route_key
@@ -912,16 +925,101 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
     return 0
 
 
-def health(cfg: sy_settings.SwitchyardSettings, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
+def _serve_refusal(cfg: sy_settings.SwitchyardSettings, token: str, refusal: str) -> int:
+    """Answer every model request with ``refusal``, calling no tier, until the user agrees or a stop.
+
+    Hermes then ends the turn with the reason at once, instead of retrying a port nothing answers.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    stop = threading.Event()
+    expected = f"Bearer {token}".encode()
+    problem = consent_problem(cfg) or refusal
+
+    class Refusal(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+        def _answer(self, status: int, body: Dict[str, Any]) -> None:
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _handle(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(min(length, 64 * 1024 * 1024))
+            if not secrets.compare_digest(self.headers.get("Authorization", "").encode(), expected):
+                self._answer(401, {"error": {"message": "unauthorized"}})
+            elif self.path == "/monitor/health":
+                self._answer(503, {"refused": problem, "pid": os.getpid()})
+            elif self.path == "/monitor/shutdown" and self.command == "POST":
+                self._answer(200, {"ok": True})
+                stop.set()
+            elif self.path.startswith("/front/"):
+                self._answer(403, {"error": {"message": refusal, "type": "permission_error",
+                                             "code": sy_settings.CONSENT_ERROR_CODE}})
+            else:
+                self._answer(404, {"error": {"message": "not found"}})
+
+        do_GET = do_POST = _handle
+
+    server = ThreadingHTTPServer(("127.0.0.1", cfg.port), Refusal)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, name="switchyard-refusal", daemon=True)
+    thread.start()
+    directory = state_dir()
+    _write_private(directory / "sidecar.json", json.dumps({"pid": os.getpid(), "port": cfg.port, "started": time.time()}))
+    print(f"Switchyard sidecar refusing every request on {cfg.front_base_url}: {problem}", flush=True)
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(signum, lambda *_: stop.set())
+        except (ValueError, OSError):
+            pass
     try:
-        response = httpx.get(
+        # Exits once the user agrees, so the next request starts a sidecar that routes.
+        while not stop.wait(1.0):
+            try:
+                if not consent_refusal(load_settings()):
+                    break
+            except sy_settings.SettingsError:
+                pass
+    finally:
+        # Before the port frees, so it cannot remove the record of the sidecar that replaces it.
+        (directory / "sidecar.json").unlink(missing_ok=True)
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
+def _health_response(cfg: sy_settings.SwitchyardSettings, timeout: float) -> Optional[httpx.Response]:
+    try:
+        return httpx.get(
             f"{cfg.tap_url}/monitor/health",
             headers={"Authorization": f"Bearer {get_token()}"},
             timeout=timeout,
         )
     except httpx.HTTPError:
         return None
-    return response.json() if response.status_code == 200 else None
+
+
+def health(cfg: sy_settings.SwitchyardSettings, timeout: float = 1.0) -> Optional[Dict[str, Any]]:
+    response = _health_response(cfg, timeout)
+    return response.json() if response is not None and response.status_code == 200 else None
+
+
+def refusing(cfg: sy_settings.SwitchyardSettings, timeout: float = 1.0) -> Optional[str]:
+    """The reason a sidecar answering on ``cfg``'s port refuses every request; None when none does."""
+    response = _health_response(cfg, timeout)
+    if response is None or response.status_code != 503:
+        return None
+    try:
+        return str(response.json().get("refused") or "") or None
+    except (ValueError, AttributeError):
+        return None
 
 
 def fetch_state(cfg: sy_settings.SwitchyardSettings, timeout: float = 2.0) -> Optional[Dict[str, Any]]:
@@ -989,10 +1087,20 @@ def _recorded_port() -> Optional[int]:
 
 
 def ensure_running(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> bool:
-    """Start the sidecar detached unless one is already healthy; True once it answers."""
+    """Start the sidecar detached unless one is already healthy; True once it answers.
+
+    Without the user's agreement to a tier's subscription sign-in, the sidecar that starts refuses
+    every request with the reason, and this returns False once it does.
+    """
     cfg = cfg or load_settings()
     if health(cfg):
         return True
+    refused = consent_refusal(cfg)
+    if refusing(cfg):
+        if refused:
+            return False
+        # The user agreed since it started.
+        stop(cfg)
     recorded = _recorded_port()
     if recorded is not None and recorded != cfg.port:
         # Its record is about to be overwritten, after which nothing could find it to stop it.
@@ -1004,6 +1112,8 @@ def ensure_running(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> bool
         status = health(cfg)
         if status and status.get("switchyard"):
             return True
+        if refused and refusing(cfg, timeout=0.5):
+            return False
         time.sleep(0.25)
     return False
 
@@ -1135,7 +1245,7 @@ def stop(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> bool:
         pass
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        if not health(cfg, timeout=0.5):
+        if not health(cfg, timeout=0.5) and not refusing(cfg, timeout=0.5):
             return True
         time.sleep(0.2)
     return _kill_recorded()
