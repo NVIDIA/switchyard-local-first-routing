@@ -866,10 +866,7 @@ def register(ctx) -> None:
     )
     ctx.register_hook("pre_api_request", _on_pre_api_request)
     ctx.register_hook("post_api_request", _on_post_api_request)
-    from hermes_cli.plugins import VALID_HOOKS
-
-    if "transform_api_error_classification" in VALID_HOOKS:
-        ctx.register_hook("transform_api_error_classification", _on_api_error_classification)
+    ctx.register_hook("transform_api_error_classification", _on_api_error_classification)
     # A Hermes without request middleware sends no x-initiator; Switchyard then reads the message shape.
     # Nor could it keep route markers away from the model, so its chats get none.
     if callable(getattr(ctx, "register_middleware", None)):
