@@ -316,6 +316,7 @@ def test_disabling_the_plugin_stops_its_sidecar_while_the_secret_scope_is_empty(
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     import agent.secret_scope
+    import hermes_cli.config
     from hermes_cli.plugins_cmd import dashboard_set_agent_plugin_enabled
 
     assert _external_setup(client).status_code == 200
@@ -336,10 +337,14 @@ def test_disabling_the_plugin_stops_its_sidecar_while_the_secret_scope_is_empty(
     try:
         (sidecar.state_dir() / "sidecar.json").write_text(json.dumps({"port": server.server_address[1]}))
         assert dashboard_set_agent_plugin_enabled(sy_settings.PLUGIN_ID, enabled=False)["ok"]
-        # As while Hermes loads its providers.
-        monkeypatch.setattr(agent.secret_scope, "get_secret", lambda name: None)
+        # As while Hermes loads its providers: the bound scope does not hold .env's values yet.
         monkeypatch.delenv(sy_settings.TOKEN_ENV, raising=False)
-        _load_provider_profile()
+        monkeypatch.setattr(hermes_cli.config, "load_env", lambda: pytest.fail(".env read outside the secret scope"))
+        scope = agent.secret_scope.set_secret_scope({})
+        try:
+            _load_provider_profile()
+        finally:
+            agent.secret_scope.reset_secret_scope(scope)
     finally:
         server.shutdown()
     # Hermes's own provider load and the one above each ask.

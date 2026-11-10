@@ -606,10 +606,21 @@ def managed_local_endpoint() -> Optional[Tuple[str, str]]:
 
 
 def get_token() -> str:
-    from agent.secret_scope import get_secret
-    from hermes_cli.config import load_env
+    from agent.secret_scope import (build_profile_secret_scope, current_secret_scope, current_secret_scope_home,
+                                    get_secret, reset_secret_scope, set_secret_scope)
+    from hermes_constants import get_hermes_home
 
-    return (get_secret(sy_settings.TOKEN_ENV) or load_env().get(sy_settings.TOKEN_ENV) or "").strip()
+    if current_secret_scope() is not None:
+        token = (get_secret(sy_settings.TOKEN_ENV) or "").strip()
+        if token:
+            return token
+    # No scope is bound, or the bound one was built before setup saved the token.
+    home = current_secret_scope_home() or str(get_hermes_home())
+    scope = set_secret_scope(build_profile_secret_scope(Path(home)), profile_home=home)
+    try:
+        return (get_secret(sy_settings.TOKEN_ENV) or "").strip()
+    finally:
+        reset_secret_scope(scope)
 
 
 def ensure_token() -> str:

@@ -179,6 +179,24 @@ def restore_previous_model() -> bool:
     return bool(restored)
 
 
+def _token() -> str:
+    from agent.secret_scope import (build_profile_secret_scope, current_secret_scope, current_secret_scope_home,
+                                    get_secret, reset_secret_scope, set_secret_scope)
+    from hermes_constants import get_hermes_home
+
+    if current_secret_scope() is not None:
+        token = (get_secret(TOKEN_ENV) or "").strip()
+        if token:
+            return token
+    # While providers load, no scope may be bound yet, or the bound one may not hold .env's values.
+    home = current_secret_scope_home() or str(get_hermes_home())
+    scope = set_secret_scope(build_profile_secret_scope(Path(home)), profile_home=home)
+    try:
+        return (get_secret(TOKEN_ENV) or "").strip()
+    finally:
+        reset_secret_scope(scope)
+
+
 def stop_sidecar() -> bool:
     """Stops the sidecar once the plugin is off. Hermes then has no ``switchyard stop`` command,
     and a sidecar left running keeps serving a plugin the user turned off."""
@@ -193,11 +211,8 @@ def stop_sidecar() -> bool:
     except (OSError, ValueError, KeyError, TypeError):
         return False
     import httpx
-    from agent.secret_scope import get_secret
-    from hermes_cli.config import load_env
 
-    # While providers load, the secret scope may not hold .env's values yet.
-    token = (get_secret(TOKEN_ENV) or load_env().get(TOKEN_ENV) or "").strip()
+    token = _token()
     if not token:
         logger.warning("Switchyard plugin is off but %s is not set, so its sidecar on port %d keeps running", TOKEN_ENV, port)
         return False
