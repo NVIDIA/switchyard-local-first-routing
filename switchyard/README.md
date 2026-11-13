@@ -156,7 +156,9 @@ form and save, or run `hermes switchyard setup --no-allow-subscription-use`.
 - **Changes Hermes settings.** Setup makes `switchyard/<preset>` the default
   model and sends session titles and smart-approval checks to the local model.
   It also sets the Switchyard provider's timeouts and records the models it
-  replaced in its plugin settings.
+  replaced in its plugin settings. If the local model gets Hermes's model-specific
+  prompt guidance, setup extends `agent.tool_use_enforcement` and
+  `agent.execution_guidance` to `switchyard/` models too.
 - **Writes outside its plugin folder.**
   - It keeps its logs, routing records and generated Switchyard config in
     `<HERMES_HOME>/switchyard/`.

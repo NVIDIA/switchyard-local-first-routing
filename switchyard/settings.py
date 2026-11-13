@@ -77,7 +77,9 @@ TITLE_TIMEOUT_KEY = "title_timeout"
 # setup writes more (stream and title timeouts, the approval pin, titles without thinking) bumps it
 # and writes them at startup.
 HERMES_SETTINGS_KEY = "hermes_settings"
-HERMES_SETTINGS_REVISION = 4
+HERMES_SETTINGS_REVISION = 5
+MODEL_GUIDANCE_GATES = ("tool_use_enforcement", "execution_guidance")
+MODEL_GUIDANCE_KEY = "model_guidance"
 # Plugin setting listing the Hermes providers whose subscription sign-in the user agreed
 # Switchyard may call on its own as it routes.
 SUBSCRIPTION_CONSENT_KEY = "subscription_consent"

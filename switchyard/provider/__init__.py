@@ -38,7 +38,7 @@ _OFFERED_ALGORITHMS = ("vgr",)
 # The plugin's settings.PIN_MODELS; this provider loads without the plugin package.
 _SINGLE_TIER_MODELS = (f"{PREFIX}only-efficient", f"{PREFIX}only-capable")
 # The plugin's settings.PLUGIN_ID, LEGACY_PLUGIN_ID, PROVIDER, PREVIOUS_MODEL_KEY,
-# TITLE_TIMEOUT_KEY, LOCAL_PIN_MODEL, PINNED_TASKS and THINKING_OFF.
+# TITLE_TIMEOUT_KEY, MODEL_GUIDANCE_KEY, MODEL_GUIDANCE_GATES, LOCAL_PIN_MODEL, PINNED_TASKS and THINKING_OFF.
 PLUGIN_ID = "nvidia-switchyard"
 LEGACY_PLUGIN_ID = "switchyard"
 PROVIDER = "switchyard"
@@ -46,6 +46,8 @@ PROVIDER = "switchyard"
 _PLUGIN_DIRS = (PLUGIN_ID, "switchyard")
 PREVIOUS_MODEL_KEY = "previous"
 TITLE_TIMEOUT_KEY = "title_timeout"
+MODEL_GUIDANCE_KEY = "model_guidance"
+MODEL_GUIDANCE_GATES = ("tool_use_enforcement", "execution_guidance")
 # The plugin's sidecar.RESTORE_FILE, in HERMES_HOME/switchyard.
 RESTORE_FILE = "restore.json"
 LOCAL_PIN_MODEL = f"{PREFIX}only-efficient"
@@ -120,7 +122,8 @@ def _restore_record(config: Any) -> dict:
         record = {}
     record = record if isinstance(record, dict) else {}
     settings = _plugin_settings(config)
-    return {**record, **{key: settings[key] for key in (PREVIOUS_MODEL_KEY, TITLE_TIMEOUT_KEY) if key in settings}}
+    return {**record, **{key: settings[key] for key in (PREVIOUS_MODEL_KEY, TITLE_TIMEOUT_KEY, MODEL_GUIDANCE_KEY)
+                         if key in settings}}
 
 
 def restore_previous_model() -> bool:
@@ -174,6 +177,13 @@ def restore_previous_model() -> bool:
     if written is not None and isinstance(titles, dict) and titles.get("timeout") == written:
         unset_config_value("auxiliary.title_generation.timeout")
         restored.append("title timeout")
+    guidance = record.get(MODEL_GUIDANCE_KEY)
+    agent = config.get("agent") if isinstance(config.get("agent"), dict) else {}
+    for gate in MODEL_GUIDANCE_GATES:
+        written = guidance.get(gate) if isinstance(guidance, dict) else None
+        if written is not None and agent.get(gate) == written:
+            unset_config_value(f"agent.{gate}")
+            restored.append(f"agent.{gate}")
     if restored:
         logger.info("Switchyard plugin is off; restored what it replaced (%s)", ", ".join(restored))
     return bool(restored)
