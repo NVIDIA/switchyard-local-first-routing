@@ -351,27 +351,6 @@ def test_disabling_the_plugin_stops_its_sidecar_while_the_secret_scope_is_empty(
     assert set(seen) == {("/monitor/shutdown", f"Bearer {token}")}
 
 
-def test_a_switchyard_model_gets_the_prompt_guidance_of_its_local_model_until_the_plugin_is_off(client):
-    from agent.prompt_builder import EXECUTION_GUIDANCE_MODELS
-    from agent.system_prompt import _model_gate
-    from hermes_cli.plugins_cmd import dashboard_set_agent_plugin_enabled
-
-    def guided(model):
-        return _model_gate((_config().get("agent") or {}).get("execution_guidance", "auto"), model,
-                           EXECUTION_GUIDANCE_MODELS)
-
-    response = client.post("/setup", json={
-        "local": {"runtime": "external", "base_url": "http://127.0.0.1:9931/v1", "model": "Qwen3.6-35B-A3B-UD-Q4_K_M"},
-        "cloud": {"api_key": "sk-test-cloud-key"},
-    })
-    assert response.status_code == 200, response.text
-    assert guided("switchyard/vgr") and not guided("claude-opus-5-5")
-
-    assert dashboard_set_agent_plugin_enabled(sy_settings.PLUGIN_ID, enabled=False)["ok"]
-    _load_provider_profile()
-    assert not guided("switchyard/vgr")
-
-
 def test_setup_after_a_remove_takes_back_the_title_timeout_the_remove_left(client):
     from hermes_cli.config import unset_config_value
     from hermes_cli.plugins_cmd import dashboard_set_agent_plugin_enabled

@@ -393,7 +393,6 @@ def configure(
         set_config_value("model.default", cfg.default.model)
         set_config_value("model.base_url", cfg.front_base_url)
     _fit_side_tasks(cfg, pin=make_default)
-    _fit_model_guidance(cfg)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
     return cfg
 
@@ -416,7 +415,6 @@ def update_hermes_settings() -> bool:
     cfg = load_settings()
     _fit_stream_timeouts(cfg)
     _fit_side_tasks(cfg, pin=default)
-    _fit_model_guidance(cfg)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
     return True
 
@@ -470,53 +468,6 @@ def _fit_stream_timeouts(cfg: sy_settings.SwitchyardSettings) -> None:
         sy_settings.save_setting((sy_settings.STREAM_TIMEOUT_KEY,), needed)
 
 
-def _hermes_guidance_models() -> Dict[str, Tuple[str, ...]]:
-    """Hermes's own model-name lists behind each guidance gate's "auto"; empty on a Hermes without them."""
-    try:
-        from agent import prompt_builder
-    except ImportError:
-        return {}
-    lists = {"tool_use_enforcement": getattr(prompt_builder, "TOOL_USE_ENFORCEMENT_MODELS", None),
-             "execution_guidance": getattr(prompt_builder, "EXECUTION_GUIDANCE_MODELS", None)}
-    return {gate: tuple(models) for gate, models in lists.items() if isinstance(models, (tuple, list))}
-
-
-def _fit_model_guidance(cfg: sy_settings.SwitchyardSettings) -> None:
-    """Extends Hermes's model-name guidance gates to switchyard/ models when the efficient model matches them.
-    Gates the user set are left alone."""
-    from hermes_cli.config import load_config, save_config
-    hermes_lists = _hermes_guidance_models()
-    config = load_config()
-    agent = config.setdefault("agent", {})
-    written = sy_settings.plugin_settings(config).get(sy_settings.MODEL_GUIDANCE_KEY)
-    written = dict(written) if isinstance(written, Mapping) else {}
-    efficient = str(cfg.local.model or "").lower()
-    record, changed = dict(written), False
-    for gate in sy_settings.MODEL_GUIDANCE_GATES:
-        current = agent.get(gate)
-        ours = written.get(gate)
-        if current not in (None, "auto") and current != ours:
-            record.pop(gate, None)
-            continue
-        models = list(hermes_lists.get(gate) or ())
-        needed = ([*models, sy_settings.MODEL_PREFIX]
-                  if any(m in efficient for m in models) and sy_settings.MODEL_PREFIX not in models else None)
-        if needed is not None:
-            # A list; set_config_value would keep it as text, since the default is the string "auto".
-            if current != needed:
-                agent[gate], changed = needed, True
-            record[gate] = needed
-        else:
-            if current is not None and current == ours:
-                del agent[gate]
-                changed = True
-            record.pop(gate, None)
-    if changed:
-        save_config(config)
-    if record != written:
-        _save_restore(sy_settings.MODEL_GUIDANCE_KEY, record or None)
-
-
 def _vgr_deadline(cfg: sy_settings.SwitchyardSettings) -> float:
     return max((float(p.route.get("deadline_seconds") or 0) for p in cfg.presets if p.algorithm == "vgr"),
                default=0.0)
@@ -559,8 +510,7 @@ def keep_restore_record() -> bool:
     """Copies what setup replaced into the state folder on a Hermes whose setup ran before it was kept there."""
     settings = sy_settings.plugin_settings(_load_config())
     record = _restore_record()
-    kept = {key: settings[key] for key in (sy_settings.PREVIOUS_MODEL_KEY, sy_settings.TITLE_TIMEOUT_KEY,
-                                           sy_settings.MODEL_GUIDANCE_KEY)
+    kept = {key: settings[key] for key in (sy_settings.PREVIOUS_MODEL_KEY, sy_settings.TITLE_TIMEOUT_KEY)
             if key in settings}
     if all(record.get(key) == value for key, value in kept.items()):
         return False
