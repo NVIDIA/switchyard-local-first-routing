@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from . import failure, stages
+from . import failure, guidance, stages
 from .initiator import REQUEST_ID_HEADER as HERMES_REQUEST_HEADER
 from .monitor import CLIENT_CLOSED, Monitor
 
@@ -594,6 +594,12 @@ class _Handler(BaseHTTPRequestHandler):
             monitor.begin_call(route, body, tier_turn)
             if route != "front" and is_completion else None
         )
+        if call is not None and call["stage"] in stages.WORK_STAGES:
+            try:
+                if guidance.add_tier_guidance(body):
+                    raw = json.dumps(body).encode()
+            except Exception as error:  # Hermes without these internals: send the request as it came
+                logger.debug("switchyard tap: no tier guidance added: %s", error)
         assemble = (
             route in self.server.stream_only and is_completion
             and upstream_path.endswith("/responses") and body.get("stream") is not True
