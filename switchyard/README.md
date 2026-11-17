@@ -227,10 +227,10 @@ sidecar.
 | Symptom | Fix |
 |---|---|
 | The install fails after a `cryptography`, `maturin` or `cargo` error | Open Hermes once and let it finish setting up, then install the plugin again. |
-| No **Switchyard** in the sidebar | Switch on Switchyard's **Desktop** switch under **Capabilities ▸ Plugins**. It reinstalls nothing, unlike the profile's switch next to it. |
+| No **NVIDIA Switchyard** in the sidebar | Switch on Switchyard's **Desktop** switch under **Capabilities ▸ Plugins**. It reinstalls nothing, unlike the profile's switch next to it. |
 | An earlier reply opens with raw `::switchyard-route{...}` text | The reply was saved with a route note, which only Switchyard's **Desktop** half draws. Switch **Desktop** back on to see it as a note. While it's off or the plugin is removed, older notes show as text, and new replies get none. Once the plugin is disabled or removed, nothing takes the notes out of the conversation, so the model sees them too when you continue that chat. |
 | The sidecar won't start and says the installed Switchyard engine does not have VGR routing | Hermes rebuilt its Python environment with a Switchyard build that has no VGR. Reinstall the plugin the way you installed it: `hermes plugins install nvidia-switchyard --force`, or the install script of the clone you installed from. |
-| After an install from an administrator terminal, the **Switchyard** page shows `404: {"detail":"Not Found"}` over a blank setup form, or chats keep retrying with "Provider temporarily unavailable" | The plugin folder belongs to Administrators, so Hermes can't load the plugin. Don't press **Save and start** on that form: it would replace your setup with its defaults. From an administrator terminal, run `icacls "<HERMES_HOME>\plugins" /reset /t`, then restart Hermes. Your settings are kept. |
+| After an install from an administrator terminal, the **NVIDIA Switchyard** page shows `404: {"detail":"Not Found"}` over a blank setup form, or chats keep retrying with "Provider temporarily unavailable" | The plugin folder belongs to Administrators, so Hermes can't load the plugin. Don't press **Save and start** on that form: it would replace your setup with its defaults. From an administrator terminal, run `icacls "<HERMES_HOME>\plugins" /reset /t`, then restart Hermes. Your settings are kept. |
 | No `switchyard/*` models in the model picker | Restart Hermes. If they're still missing, check that `<HERMES_HOME>/plugins/model-providers/switchyard/` exists; the plugin recreates it each time it loads. |
 | The sidecar won't start and `sidecar.log` says `nemo-switchyard is not installed` | Run `hermes plugins install nvidia-switchyard --force` on a machine that can reach pypi.org. |
 | `SWITCHYARD_CLOUD_API_KEY is not set` | Paste the key on the Setup tab and click **Save and start Switchyard**, or add it to Hermes's `.env`. |
@@ -252,7 +252,8 @@ does not start if any file differs, is missing or was added. The `runtime:` line
 
 To update, click **Update** on the plugin in **Capabilities ▸ Plugins**, or run
 `hermes plugins update nvidia-switchyard`. Your settings live in Hermes's config and
-are kept.
+are kept. Then restart Hermes, or run `hermes gateway restart`, so the model picker
+shows the updated names.
 
 To remove, remove it in **Capabilities ▸ Plugins**, or run
 `hermes plugins remove nvidia-switchyard`. On its next start, Hermes goes back to the

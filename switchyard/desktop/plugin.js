@@ -977,7 +977,7 @@ function SidecarCard({ state }) {
     ['local', 'cloud'].map(name =>
       line(name, `${config[name].role} (${name}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
     ),
-    runtime && runtime.version ? line('version', `Switchyard ${runtime.version}`, runtime.location) : null
+    state.running && runtime && runtime.version ? line('version', `Switchyard ${runtime.version}`, runtime.location) : null
   )
 }
 
@@ -1476,18 +1476,23 @@ function MonitorView({ state, onChanged }) {
 
   if (!monitor) {
     return h(
-      Card,
-      { title: 'Sidecar stopped' },
+      'div',
+      { className: 'grid gap-4' },
       h(
-        'p',
-        { className: 'text-xs text-muted-foreground' },
-        'The Switchyard sidecar is not running, so there is nothing to monitor.'
+        Card,
+        { title: 'Sidecar stopped' },
+        h(
+          'p',
+          { className: 'text-xs text-muted-foreground' },
+          'The Switchyard sidecar is not running, so there is nothing to monitor.'
+        ),
+        h(
+          Button,
+          { className: 'self-start', disabled: starting, onClick: () => void start() },
+          starting ? 'Starting…' : 'Start sidecar'
+        )
       ),
-      h(
-        Button,
-        { className: 'self-start', disabled: starting, onClick: () => void start() },
-        starting ? 'Starting…' : 'Start sidecar'
-      )
+      h(SidecarCard, { state })
     )
   }
 
