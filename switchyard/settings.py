@@ -33,6 +33,10 @@ PROVIDER = "switchyard"
 MODEL_PREFIX = "switchyard/"
 # Resolved by the sidecar to whichever preset is the default when the request arrives.
 DEFAULT_MODEL = f"{MODEL_PREFIX}default"
+# The model picker's automatic choice and the model setup gives Hermes, resolved as DEFAULT_MODEL is.
+# Hermes shows a model by the part after the provider, so this reads "NVIDIA Switchyard"; preset
+# names are lowercase, so none can take it.
+AUTO_MODEL = f"{MODEL_PREFIX}NVIDIA-Switchyard"
 TOKEN_ENV = "SWITCHYARD_API_KEY"
 # Set only inside the sidecar process: the key Switchyard sends on its calls to the tap's tier routes.
 TIER_ROUTE_KEY_ENV = "SWITCHYARD_TIER_ROUTE_KEY"
@@ -63,6 +67,8 @@ PIN_TARGETS = ("local", "cloud")
 PIN_PRESET_PREFIX = "pin-"
 # The model picker's single-tier choices, named by role; they serve through the pin routes.
 PIN_MODELS = {f"{MODEL_PREFIX}only-{ROLES[tier]}": tier for tier in PIN_TARGETS}
+# What the plugin page and CLI call each pin value.
+MODES = {"": "Auto", "local": "Local Only", "cloud": "Cloud Only"}
 LOCAL_PIN_MODEL = f"{MODEL_PREFIX}only-{ROLES['local']}"
 # Hermes auxiliary tasks setup sends straight to LOCAL_PIN_MODEL: session titles and smart approval.
 PINNED_TASKS = ("title_generation", "approval")
@@ -78,7 +84,7 @@ TITLE_TIMEOUT_KEY = "title_timeout"
 # setup writes more (stream and title timeouts, the approval pin, titles without thinking) bumps it
 # and writes them at startup.
 HERMES_SETTINGS_KEY = "hermes_settings"
-HERMES_SETTINGS_REVISION = 4
+HERMES_SETTINGS_REVISION = 5
 # Plugin setting listing the Hermes providers whose subscription sign-in the user agreed
 # Switchyard may call on its own as it routes.
 SUBSCRIPTION_CONSENT_KEY = "subscription_consent"
@@ -343,9 +349,10 @@ class SwitchyardSettings:
         raise SettingsError(f"no Switchyard preset named {name!r}")
 
     def preset_for_model(self, model: Any) -> Optional[Preset]:
-        """The preset a request's ``model`` selects; ``switchyard/default`` and an empty model pick the default."""
+        """The preset a request's ``model`` selects; ``AUTO_MODEL``, ``switchyard/default`` and an empty
+        model pick the default."""
         name = str(model or "")
-        if not name or name == DEFAULT_MODEL:
+        if not name or name in (AUTO_MODEL, DEFAULT_MODEL):
             return self.default
         if name in PIN_MODELS:
             return pin_preset(PIN_MODELS[name])

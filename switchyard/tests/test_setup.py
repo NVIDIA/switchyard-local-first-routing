@@ -48,7 +48,7 @@ def test_managed_setup_routes_hermes_through_the_vgr_preset_with_the_quickstart_
     assert cfg.local.managed and cfg.local.model == "Qwen3.6-35B-A3B-UD-Q4_K_M"
     assert sy_settings.PLUGIN_ID in _config()["plugins"]["enabled"]
     assert _config()["model"]["provider"] == sy_settings.PROVIDER
-    assert _config()["model"]["default"] == "switchyard/vgr"
+    assert _config()["model"]["default"] == sy_settings.AUTO_MODEL
     assert get_secret(cfg.cloud.api_key_env) == "sk-test-cloud-key"
 
 
@@ -122,11 +122,12 @@ def test_a_session_title_waits_for_the_local_model_when_switchyard_is_picked_per
 
 def test_an_upgrade_writes_the_hermes_settings_an_older_setup_did_not(client):
     from agent.auxiliary_client import _get_task_extra_body, _get_task_timeout, _resolve_task_provider_model
-    from hermes_cli.config import unset_config_value
+    from hermes_cli.config import set_config_value, unset_config_value
     from hermes_cli.plugins_state import save_plugin_setting
     from hermes_cli.timeouts import get_provider_stale_timeout
 
     assert _external_setup(client).status_code == 200
+    set_config_value("model.default", "switchyard/vgr")
     for task in ("provider", "model", "base_url"):
         unset_config_value(f"auxiliary.approval.{task}")
     unset_config_value("auxiliary.title_generation.timeout")
@@ -143,7 +144,13 @@ def test_an_upgrade_writes_the_hermes_settings_an_older_setup_did_not(client):
                                                          "chat_template_kwargs": {"enable_thinking": False}}
     wait = sy_settings.UNBOUNDED_DEADLINE_SECONDS + sidecar._CLOUD_START_S
     assert get_provider_stale_timeout(sy_settings.PROVIDER, "switchyard/vgr") == wait
+    assert _config()["model"]["default"] == sy_settings.AUTO_MODEL
     assert sidecar.update_hermes_settings() is False
+
+    set_config_value("model.default", "switchyard/only-capable")
+    save_plugin_setting(sy_settings.PLUGIN_ID, (sy_settings.HERMES_SETTINGS_KEY,), None)
+    assert sidecar.update_hermes_settings() is True
+    assert _config()["model"]["default"] == "switchyard/only-capable"
 
 
 def test_a_cloud_efficient_tier_is_not_sent_llama_cpp_thinking_fields(client):
@@ -585,7 +592,7 @@ def test_presets_are_created_kept_across_setup_and_deleted(client):
         "algorithm": "vgr", "options": {"deadline_seconds": 120}, "make_default": True,
     })
     assert created.status_code == 200, created.text
-    assert _config()["model"]["default"] == "switchyard/quick"
+    assert _config()["model"]["default"] == sy_settings.AUTO_MODEL
 
     rerun = _external_setup(client, preset_name="quick", preset={"algorithm": "vgr"})
     assert rerun.status_code == 200, rerun.text
@@ -600,7 +607,7 @@ def test_presets_are_created_kept_across_setup_and_deleted(client):
     assert client.delete("/presets/quick").status_code == 200
     cfg = sy_settings.load(sy_settings.plugin_settings(_config()))
     assert [p.name for p in cfg.presets] == ["vgr"]
-    assert _config()["model"]["default"] == "switchyard/vgr"
+    assert _config()["model"]["default"] == sy_settings.AUTO_MODEL
 
 
 def test_algorithms_other_than_vgr_are_neither_offered_nor_shown(client):
@@ -780,14 +787,17 @@ def test_hermes_models_default_the_efficient_tier_to_the_one_click_local_model(c
     assert listed["defaults"]["cloud"]["provider"] == "openrouter"
 
 
-def test_hermes_current_model_fills_the_tier_it_belongs_to(client, inventory):
+def test_hermes_current_model_fills_the_tier_it_belongs_to_after_a_built_in_local_model(client, inventory):
     from hermes_cli.config import set_config_value
 
     set_config_value("model.provider", "custom:lan-vllm")
     set_config_value("model.default", "qwen3-32b")
     inventory[3]["is_current"] = True
+    assert client.get("/providers").json()["defaults"]["local"]["source"] == "managed"
+    inventory[4]["authenticated"] = False
     local_current = client.get("/providers").json()
     assert local_current["defaults"]["local"] == {"source": "provider", "provider": "custom:lan-vllm", "model": "qwen3-32b"}
+    inventory[4]["authenticated"] = True
 
     set_config_value("model.provider", "openrouter")
     set_config_value("model.default", "vendor/small")

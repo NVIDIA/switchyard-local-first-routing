@@ -390,11 +390,31 @@ def configure(
     if make_default:
         _remember_previous_model()
         set_config_value("model.provider", sy_settings.PROVIDER)
-        set_config_value("model.default", cfg.default.model)
+        set_config_value("model.default", sy_settings.AUTO_MODEL)
         set_config_value("model.base_url", cfg.front_base_url)
     _fit_side_tasks(cfg, pin=make_default)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
+    _refresh_model_menu()
     return cfg
+
+
+def _refresh_model_menu() -> None:
+    """Drops Hermes's cached list of Switchyard's models, which it would otherwise show for up to an hour."""
+    try:
+        from hermes_cli.models import clear_provider_models_cache
+
+        clear_provider_models_cache(sy_settings.PROVIDER)
+    except Exception as error:  # an older Hermes without the cache; the menu catches up on its own
+        logger.debug("Switchyard could not refresh Hermes's model menu: %s", error)
+
+
+def _use_auto_model(cfg: sy_settings.SwitchyardSettings, model: Mapping[str, Any]) -> None:
+    """Moves Hermes from the default preset's own model, which an older setup gave it, to AUTO_MODEL.
+    Both route the same way; a model the user picked for themselves stays."""
+    from hermes_cli.config import set_config_value
+
+    if model.get("default") == cfg.default.model:
+        set_config_value("model.default", sy_settings.AUTO_MODEL)
 
 
 def update_hermes_settings() -> bool:
@@ -413,9 +433,12 @@ def update_hermes_settings() -> bool:
     if isinstance(applied, int) and applied >= sy_settings.HERMES_SETTINGS_REVISION:
         return False
     cfg = load_settings()
+    if default:
+        _use_auto_model(cfg, model)
     _fit_stream_timeouts(cfg)
     _fit_side_tasks(cfg, pin=default)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
+    _refresh_model_menu()
     return True
 
 

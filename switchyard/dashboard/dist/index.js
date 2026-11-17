@@ -471,14 +471,14 @@
             h("div", { className: "sy-muted" }, "Hover a reason for its explanation; each decision below has the details."))));
   }
 
-  // Smart routing, or every request pinned to one tier; applies to the running sidecar at once.
+  // Auto, or Local Only / Cloud Only (every request pinned to one tier); applies to the running sidecar at once.
   function PinControl(props) {
     const config = props.config;
     const [busy, setBusy] = useState(false);
     const options = [
-      ["", "Smart routing", "Route with the selected preset"],
-      ["local", "Always " + config.local.model, "Every request goes to the " + config.local.role + " model"],
-      ["cloud", "Always " + config.cloud.model, "Every request goes to the " + config.cloud.role + " model"],
+      ["", "Auto", "Switchyard picks the model for each request with the selected preset"],
+      ["local", "Local Only", "Every request goes to the local (" + config.local.role + ") model, " + config.local.model],
+      ["cloud", "Cloud Only", "Every request goes to the cloud (" + config.cloud.role + ") model, " + config.cloud.model],
     ];
     const choose = function (pin) {
       setBusy(true);
@@ -562,8 +562,9 @@
           data.running ? null : h(Button, { onClick: start, disabled: starting }, starting ? "Starting..." : "Start sidecar")),
         data && data.configured ? h(PinControl, { config: data.config, onChange: load, onError: setError }) : null,
         data && data.configured && data.config.pin
-          ? h("div", { className: "sy-pinned" }, "Pinned: every request goes to " + data.config[data.config.pin].model +
-            "; routing decisions and the local share below reflect the pin, not the preset.")
+          ? h("div", { className: "sy-pinned" }, (data.config.pin === "local" ? "Local Only" : "Cloud Only") +
+            ": every request goes to " + data.config[data.config.pin].model +
+            "; routing decisions and the local share below reflect the mode, not the preset.")
           : null,
         data && data.configured && data.state ? ["local", "cloud"].map(function (tier) {
           const alert = (data.state.credit_alerts || {})[tier];

@@ -23,7 +23,8 @@ commands and a Switchyard page in the dashboard and in Hermes Desktop.
 - **A local model** on an OpenAI-compatible Chat Completions server that
   returns token probabilities, such as
   [`llama-server`](https://github.com/ggml-org/llama.cpp). VGR scores the local
-  model's answers from them. Hermes's one-click llama.cpp setup works too.
+  model's answers from them. A model built into Hermes (**Settings ▸ Providers
+  ▸ Local Models**) works too.
 - **A cloud model**: any OpenAI- or Anthropic-compatible server, or a provider
   you are signed in to in Hermes (`hermes auth`). Users can configure
   Switchyard with third-party model providers. Each provider's terms and
@@ -60,17 +61,23 @@ hermes plugins install file:///path/to/this/repository#switchyard
 **NVIDIA Switchyard**'s switches are on: the one under the profile picker (for example
 **Hermes (default)**) turns on NVIDIA Switchyard for that profile, and
 **Desktop** adds its page and chat notes. Then open **NVIDIA Switchyard** in the sidebar. Its
-setup form picks each model from:
+setup form picks the **Local model** (the efficient one, which handles most
+requests) and the **Cloud model** (the capable one, which takes what the
+efficient model can't) from:
 
+- **Local Model** (local model only): a model built into Hermes. **Set up local
+  model** opens **Settings ▸ Providers ▸ Local Models** to download one; the
+  form picks it up when you come back.
 - **Existing Provider**: a model or signed-in provider Hermes already has.
   Switchyard uses Hermes's login on each call and doesn't copy the token.
-- **Set up llama.cpp for me**: Hermes downloads a model sized for this machine
-  and runs it.
+  **Configure provider** opens **Settings ▸ Providers**.
 - **Custom URL**: any OpenAI- or Anthropic-compatible server. An API key you paste is saved in
   Hermes's `.env` as `SWITCHYARD_LOCAL_API_KEY` or `SWITCHYARD_CLOUD_API_KEY`.
 
-Leave **Routing algorithm** on **VGR** and click **Save and start Switchyard**.
-The VGR preset (`switchyard/vgr`) becomes the default model.
+Click **Save and start Switchyard**. Hermes's model becomes **NVIDIA
+Switchyard** (`switchyard/NVIDIA-Switchyard`), which routes with the default
+preset, VGR unless you change it; other routing algorithms are set up as
+presets on the same page.
 
 **From a terminal:** put the cloud key in Hermes's `.env` as
 `SWITCHYARD_CLOUD_API_KEY`, then:
@@ -156,8 +163,8 @@ form and save, or run `hermes switchyard setup --no-allow-subscription-use`.
     each call, sign-ins included, and sends it only to that provider. It
     doesn't store it. The exception is a custom endpoint from Hermes's
     `model` settings: setup saves that endpoint's key as the tier's key.
-- **Changes Hermes settings.** Setup makes `switchyard/<preset>` the default
-  model and sends session titles and smart-approval checks to the local model.
+- **Changes Hermes settings.** Setup makes `switchyard/NVIDIA-Switchyard` the
+  default model and sends session titles and smart-approval checks to the local model.
   It also sets the Switchyard provider's timeouts and records the models it
   replaced in its plugin settings.
 - **Writes outside its plugin folder.**
@@ -177,16 +184,17 @@ form and save, or run `hermes switchyard setup --no-allow-subscription-use`.
 
 ## Using Switchyard
 
-### Smart routing or always one model
+### Auto, Local Only or Cloud Only
 
-The toggle at the top of the Switchyard page switches between **Smart routing**
-(the preset decides), **Always <local model>** and **Always <cloud model>**, for
-every chat and across restarts. From a terminal:
+The toggle at the top of the Switchyard page switches between **Auto** (the
+preset picks the model for each request), **Local Only** and **Cloud Only**,
+for every chat and across restarts. From a terminal:
 `hermes switchyard pin local|cloud|off`.
 
-To pin one chat instead, pick **Only Efficient** (local) or **Only Capable**
-(cloud) in its model picker, or `/model switchyard/only-capable --provider
-switchyard` in a terminal chat.
+Hermes's model picker lists **NVIDIA Switchyard** and any other presets you
+add. To keep one chat on one model, run `/model switchyard/only-efficient
+--provider switchyard` (local) or `/model switchyard/only-capable --provider
+switchyard` (cloud) in it.
 
 Once VGR escalates a turn, it stays on the cloud model until your next message.
 
@@ -202,7 +210,8 @@ and waiting for approvals. `hermes switchyard status` shows which is in effect.
 
 ### Presets
 
-Each preset is one VGR route, served as `switchyard/<name>`. Add, delete or
+Each preset is one VGR route, served as `switchyard/<name>`;
+`switchyard/NVIDIA-Switchyard` serves the default preset. Add, delete or
 make one the default on the Switchyard page, or with `hermes switchyard
 list`, `configure <name> --set KEY=VALUE` and `delete <name>`. Switch presets in
 chat with `/model <name> --provider switchyard`.
@@ -253,7 +262,13 @@ does not start if any file differs, is missing or was added. The `runtime:` line
 To update, click **Update** on the plugin in **Capabilities ▸ Plugins**, or run
 `hermes plugins update nvidia-switchyard`. Your settings live in Hermes's config and
 are kept. Then restart Hermes, or run `hermes gateway restart`, so the model picker
-shows the updated names.
+shows the updated names. An update from a version whose setup made `switchyard/<preset>`
+Hermes's model moves it to `switchyard/NVIDIA-Switchyard`, which routes the same way; a
+preset or model you picked yourself stays, and `switchyard/<preset>`,
+`switchyard/default`, `switchyard/only-efficient` and `switchyard/only-capable` keep
+working. To go back to such a version, run `hermes switchyard setup` after
+installing it, or `hermes config set model.default switchyard/<preset>`: it doesn't
+know `switchyard/NVIDIA-Switchyard`.
 
 To remove, remove it in **Capabilities ▸ Plugins**, or run
 `hermes plugins remove nvidia-switchyard`. On its next start, Hermes goes back to the

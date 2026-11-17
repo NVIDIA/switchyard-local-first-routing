@@ -272,13 +272,13 @@ def test_pin_sends_every_request_to_one_tier_until_released(vgr):
     assert client.post(f"{cfg.tap_url}/monitor/pin", json={"pin": "both"}).status_code == 400
 
 
-def test_the_pickers_single_tier_models_skip_routing_and_are_no_escalation(vgr):
+def test_the_single_tier_models_left_out_of_the_picker_skip_routing_and_are_no_escalation(vgr):
     cfg, client, local, cloud = vgr
     spec = importlib.util.spec_from_file_location(
         "switchyard_provider_profile", Path(__file__).parents[1] / "provider" / "__init__.py")
     profile = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(profile)
-    assert set(profile._SINGLE_TIER_MODELS) == set(sy_settings.PIN_MODELS)
+    assert not set(profile.switchyard.fetch_models()) & set(sy_settings.PIN_MODELS)
 
     def ask(text: str, model: str) -> httpx.Response:
         return client.post("/chat/completions", headers={"x-switchyard-session-id": model},
@@ -423,6 +423,7 @@ def test_each_preset_is_its_own_route_and_ledger(vgr):
     cfg, client, local, cloud = vgr
     assert _ask(client, "What is 2+2?", model=CLOUD_ONLY).json()["choices"][0]["message"]["content"] == cloud.answer
     assert _ask(client, "What is 3+3?", model=sy_settings.DEFAULT_MODEL).status_code == 200
+    assert _ask(client, "What is 4+4?", model=sy_settings.AUTO_MODEL).status_code == 200
     assert local.requests
 
     state = sidecar.fetch_state(cfg)
@@ -432,8 +433,9 @@ def test_each_preset_is_its_own_route_and_ledger(vgr):
     assert passthrough["outcome"] == "served_cloud"
     assert {s["tier"] for s in passthrough["stages"]} == {"cloud"}
     assert (default["preset"], default["outcome"]) == ("vgr", "local_committed")
+    assert (turns["What is 4+4?"]["preset"], turns["What is 4+4?"]["outcome"]) == ("vgr", "local_committed")
     assert state["totals"]["by_preset"][CLOUD_PIN]["served"] == {"local": 0, "cloud": 1}
-    assert state["totals"]["by_preset"]["vgr"]["served"] == {"local": 1, "cloud": 0}
+    assert state["totals"]["by_preset"]["vgr"]["served"] == {"local": 2, "cloud": 0}
 
 
 def test_unknown_preset_is_rejected_before_routing(vgr):
