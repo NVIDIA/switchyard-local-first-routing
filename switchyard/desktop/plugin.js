@@ -33,7 +33,7 @@ import * as sdk from '@hermes/plugin-sdk'
 import { createElement as h, useEffect, useRef, useState } from 'react'
 
 const PATH = '/switchyard'
-const PRODUCT_NAME = 'Switchyard Local-first Routing'
+const PRODUCT_NAME = 'NVIDIA Switchyard'
 const JOB_POLL_MS = 1000
 const MONITOR_POLL_MS = 1000
 const PROGRESS_POLL_MS = 1500
@@ -304,12 +304,9 @@ function CreditAlerts({ state }) {
 // "hermes" is a model Hermes already has: a one-click llama.cpp model (a managed tier) or a
 // provider's model (a provider tier).
 const SOURCES = {
-  hermes: [
-    'Your Hermes models',
-    'A model Hermes already has: one-click local models, signed-in providers, and your own endpoints.'
-  ],
+  hermes: ['Existing Provider', 'Use a model configured in Hermes'],
   managed: ['Set up llama.cpp for me', 'Download and run a model sized for this machine with llama.cpp.'],
-  url: ['Server URL', 'Any OpenAI- or Anthropic-compatible server: llama-server, vLLM, or a cloud API.']
+  url: ['Custom URL', 'OpenAI- or Anthropic-compatible']
 }
 
 const NO_HERMES_MODELS = { current: null, defaults: {}, providers: [] }
@@ -485,7 +482,7 @@ function TierFields({ name, draft, onChange, onKeyDown, hermes }) {
       ? [
           h(Field, {
             key: 'url',
-            label: 'Server URL (e.g. http://127.0.0.1:8080/v1 or https://api.anthropic.com)',
+            label: 'Endpoint URL (e.g. http://127.0.0.1:8080/v1 or https://api.anthropic.com)',
             onChange: e => set({ base_url: e.target.value }),
             onKeyDown,
             value: draft.base_url
@@ -728,17 +725,10 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
         })
       : null,
     h(ToggleRow, {
-      below: h(
-        'p',
-        { className: 'mt-1 text-xs text-muted-foreground' },
-        'Replies come back sooner and more of the work goes to the cloud model, which can improve ' +
-          'accuracy, but cloud usage and cost are much higher.'
-      ),
       checked: bounded,
       description:
-        'By default the local model gets up to 30 minutes per request and no limit per message. This limits local work to 300 s per request ' +
-        'and 600 s per message, and hands the work to the cloud model when it runs over. Time spent running ' +
-        'tools and waiting for your approval counts toward the 600 s.',
+        'Escalate after 5 minutes per request or 10 minutes per message, including tools and approvals. ' +
+        'Replies may be faster, with higher costs.',
       disabled: busy,
       label: 'Bound local thinking time',
       onChange: setBounded
@@ -964,29 +954,30 @@ function StatusLine({ state }) {
     return h('p', { className: 'text-sm text-destructive' }, state.error || 'Switchyard is not configured')
   }
 
-  const { config } = state
+  return state.active && state.running ? null : h('p', { className: 'text-sm' }, `${routeStatus(state)}.`)
+}
+
+function routeStatus(state) {
   const sidecar = state.running ? 'running' : 'not running'
   const route = state.active ? `Hermes uses ${state.selected_model}` : 'Switchyard is not Hermes\u2019s model yet'
+
+  return `${route}; sidecar ${sidecar}`
+}
+
+function SidecarCard({ state }) {
+  const { config } = state
   const runtime = state.state && state.state.runtime
+  const line = (key, text, title) =>
+    h('p', { className: 'font-mono text-xs text-muted-foreground', key, title }, text)
 
   return h(
-    'div',
-    { className: 'grid gap-1 text-sm' },
-    h('p', null, `${route}; sidecar ${sidecar}.`),
+    Card,
+    { title: 'Sidecar' },
+    h('p', { className: 'text-xs' }, `${routeStatus(state)}.`),
     ['local', 'cloud'].map(name =>
-    h(
-      'p',
-        { className: 'font-mono text-xs text-muted-foreground', key: name },
-        `${config[name].role} (${name}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`
-      )
+      line(name, `${config[name].role} (${name}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
     ),
-    runtime && runtime.version
-      ? h(
-          'p',
-          { className: 'font-mono text-xs text-muted-foreground', title: runtime.location },
-          `Switchyard ${runtime.version}`
-        )
-      : null
+    state.running && runtime && runtime.version ? line('version', `Switchyard ${runtime.version}`, runtime.location) : null
   )
 }
 
@@ -1485,18 +1476,23 @@ function MonitorView({ state, onChanged }) {
 
   if (!monitor) {
     return h(
-      Card,
-      { title: 'Sidecar stopped' },
+      'div',
+      { className: 'grid gap-4' },
       h(
-        'p',
-        { className: 'text-xs text-muted-foreground' },
-        'The Switchyard sidecar is not running, so there is nothing to monitor.'
+        Card,
+        { title: 'Sidecar stopped' },
+        h(
+          'p',
+          { className: 'text-xs text-muted-foreground' },
+          'The Switchyard sidecar is not running, so there is nothing to monitor.'
+        ),
+        h(
+          Button,
+          { className: 'self-start', disabled: starting, onClick: () => void start() },
+          starting ? 'Starting…' : 'Start sidecar'
+        )
       ),
-      h(
-        Button,
-        { className: 'self-start', disabled: starting, onClick: () => void start() },
-        starting ? 'Starting…' : 'Start sidecar'
-      )
+      h(SidecarCard, { state })
     )
   }
 
@@ -1523,7 +1519,8 @@ function MonitorView({ state, onChanged }) {
             { className: 'text-xs text-muted-foreground' },
             'No routed turns yet. Chat with Hermes to see decisions here.'
           )
-    )
+    ),
+    h(SidecarCard, { state })
   )
 }
 
@@ -1541,22 +1538,11 @@ function PageHeader({ onChanged, state }) {
   return h(
     'header',
     { className: 'grid gap-2' },
-    h(
-      'h1',
-      { className: 'flex items-center gap-2 text-lg font-semibold' },
-      PRODUCT_NAME,
-      h(
-        'span',
-        { className: 'rounded-full border border-amber-500/60 px-2 py-0.5 text-xs font-medium text-amber-600' },
-        'Beta'
-      )
-    ),
+    h('h1', { className: 'text-lg font-semibold' }, `${PRODUCT_NAME} (Beta)`),
     h(
       'p',
       { className: 'text-xs text-muted-foreground' },
-      `${PRODUCT_NAME} answers with the efficient model when it can and uses the capable model when it must, ` +
-        'with Verification-Gated Routing (VGR). Each preset appears as a model under the Switchyard provider. ' +
-        'It is in beta: its routing and settings may change between releases.'
+      'Automatic inference routing between local and cloud models, escalating tasks only when needed.'
     ),
     h(StatusLine, { state }),
     ready ? h(PinToggle, { config: state.config, onChanged }) : null,
@@ -1587,7 +1573,7 @@ function SetupTab({ algorithms, configured, onChanged, state }) {
   return [
     h(
       Section,
-      { key: 'tiers', title: configured ? 'Tiers' : 'Set up the efficient and capable models' },
+      { key: 'tiers', title: 'Select your models' },
       state
         ? h(SetupForm, {
             algorithms,
@@ -1801,7 +1787,7 @@ export default {
         id: 'nav',
         area: SIDEBAR_NAV_AREA,
         order: 60,
-        data: { codicon: 'server-process', label: `${PRODUCT_NAME} (Beta)`, path: PATH }
+        data: { codicon: 'server-process', label: PRODUCT_NAME, path: PATH }
       },
       {
         id: 'setup',

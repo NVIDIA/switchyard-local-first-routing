@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Switchyard Local-first Routing (beta) provider profile: the loopback sidecar run by the ``switchyard`` plugin.
+"""NVIDIA Switchyard (beta) provider profile: the loopback sidecar run by the ``switchyard`` plugin.
 
 The sidecar serves one model per preset, ``switchyard/<preset>``, each a
 Verification-Gated Routing route over a local and a cloud tier, plus
@@ -311,8 +311,8 @@ class SwitchyardProfile(ProviderProfile):
 switchyard = SwitchyardProfile(
     name="switchyard",
     aliases=("nemo-switchyard",),
-    display_name="Switchyard Local-first Routing (Beta)",
-    description="Beta. Route between a local and a cloud model with Verification-Gated Routing",
+    display_name="NVIDIA Switchyard",
+    description="Beta. Automatic inference routing between local and cloud models, escalating tasks only when needed",
     env_vars=("SWITCHYARD_API_KEY",),
     base_url="http://127.0.0.1:4110/front/v1",
     default_headers={CLIENT_HEADER: HERMES_CLIENT},

@@ -26,7 +26,7 @@ PLUGIN_ID = "nvidia-switchyard"
 _context: Any = None
 # The plugin's id before it took the vendor prefix; settings saved under it move to PLUGIN_ID on load.
 LEGACY_PLUGIN_ID = "switchyard"
-PRODUCT_NAME = "Switchyard Local-first Routing"
+PRODUCT_NAME = "NVIDIA Switchyard"
 # How users see the plugin while it is in beta.
 PRODUCT_LABEL = f"{PRODUCT_NAME} (Beta)"
 PROVIDER = "switchyard"

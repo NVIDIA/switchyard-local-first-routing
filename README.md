@@ -1,4 +1,4 @@
-# Switchyard Local-first Routing plugin for Hermes (Beta)
+# NVIDIA Switchyard plugin for Hermes (Beta)
 
 The plugin is the [`switchyard/`](switchyard) folder. Its
 [README](switchyard/README.md) covers installing, setting up and using it.

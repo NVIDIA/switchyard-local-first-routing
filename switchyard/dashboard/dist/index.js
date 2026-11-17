@@ -541,7 +541,7 @@
     };
 
     const header = h(Card, null,
-      h(CardHeader, null, h(CardTitle, null, "Switchyard Local-first Routing ", h(Badge, null, "Beta"))),
+      h(CardHeader, null, h(CardTitle, null, "NVIDIA Switchyard ", h(Badge, null, "Beta"))),
       h(CardContent, null,
         h("div", { className: "sy-muted" }, "In beta: routing and settings may change between releases."),
         !data ? h("div", { className: "sy-muted" }, error || "Loading...") :

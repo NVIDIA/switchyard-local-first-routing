@@ -1,7 +1,7 @@
 {
   "name": "nvidia-switchyard",
-  "label": "Switchyard Local-first Routing (Beta)",
-  "description": "Beta. Live Switchyard Local-first Routing decisions for every preset: current tier, VGR's verification stage, and token spend per tier.",
+  "label": "NVIDIA Switchyard (Beta)",
+  "description": "Beta. Live NVIDIA Switchyard routing decisions for every preset: current tier, VGR's verification stage, and token spend per tier.",
   "icon": "Activity",
   "version": "0.1.0",
   "tab": { "path": "/switchyard", "position": "after:analytics" },

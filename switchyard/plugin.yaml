@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: nvidia-switchyard
-label: "Switchyard Local-first Routing (Beta)"
+label: "NVIDIA Switchyard (Beta)"
 version: 0.1.0
-description: "Beta. With Switchyard Local-first Routing, Hermes routes between two models (a local and a cloud one by default; any URL or third-party provider set up in Hermes, under that provider's terms and conditions) with Verification-Gated Routing, as named presets selectable as models. Runs Switchyard in a loopback sidecar."
+description: "Beta. Automatic inference routing between local and cloud models, escalating tasks only when needed. Any URL or third-party provider set up in Hermes can serve either model, under that provider's terms and conditions. Runs Switchyard in a loopback sidecar."
 author: NVIDIA
 license: Apache-2.0
 python_dependencies:
