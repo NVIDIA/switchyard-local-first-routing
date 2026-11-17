@@ -734,9 +734,13 @@ def verifier_warning(cfg: sy_settings.SwitchyardSettings) -> Optional[str]:
 
 
 # OpenAI's reasoning models refuse ``max_tokens``, so only a local server's probe caps its reply that way.
+# Hermes sends tools on every turn, and some models refuse tools on Chat Completions.
+_PROBE_TOOL = {"type": "function", "function": {
+    "name": "noop", "description": "Does nothing.", "parameters": {"type": "object", "properties": {}}}}
 _ACCOUNT_PROBES = {
     "openai_chat": ("/chat/completions", lambda model, local: {
-        "model": model, "messages": [{"role": "user", "content": "Reply with: ok"}], **({"max_tokens": 1} if local else {})}),
+        "model": model, "messages": [{"role": "user", "content": "Reply with: ok"}], "tools": [_PROBE_TOOL],
+        **({"max_tokens": 1} if local else {})}),
     "openai_responses": ("/responses", lambda model, local: {
         "model": model, "input": "Reply with: ok", "max_output_tokens": 16}),
     "anthropic_messages": ("/v1/messages", lambda model, local: {
@@ -799,9 +803,11 @@ def _account_warning(name: str, tier: sy_settings.Tier) -> Optional[str]:
     # A timeout, conflict, rate limit or server error passes; it says nothing about the URL, model or key.
     if 400 <= response.status_code < 500 and response.status_code not in (408, 409, 429) and not stream_only:
         detail = _provider_detail(response.content)
+        responses = (f" If it needs the Responses API, run `hermes switchyard setup --{name}-format openai_responses`."
+                     if tier.source == "url" and tier.format == "openai_chat" else "")
         return (f"The {role} model {tier.model} refused a test request (HTTP {response.status_code}"
                 f"{': ' + detail if detail else ''}), so calls to it would likely fail the same way. Check its "
-                "URL, model name and API key.")
+                f"URL, model name and API key.{responses}")
     return None
 
 

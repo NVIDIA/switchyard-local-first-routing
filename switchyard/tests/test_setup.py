@@ -216,6 +216,7 @@ def test_setup_warns_about_a_tier_whose_account_cannot_answer(monkeypatch):
         })
         assert sidecar.account_warnings(cfg) == []
         assert cloud.requests[-1]["authorization"] == "Bearer k"
+        assert [tool["function"]["name"] for tool in cloud.requests[-1]["body"]["tools"]] == ["noop"]
 
         cloud.status = 429
         cloud.error_body = json.dumps({"error": {"message": "You exceeded your current quota.", "code": "insufficient_quota"}})
@@ -237,6 +238,7 @@ def test_setup_warns_about_a_tier_whose_account_cannot_answer(monkeypatch):
         [warning] = sidecar.account_warnings(cfg)
         assert warning.startswith("The capable model cloud-m refused a test request (HTTP 400: The model `cloud-m` "
                                   "does not exist)")
+        assert warning.endswith("run `hermes switchyard setup --cloud-format openai_responses`.")
     finally:
         local.stop()
         cloud.stop()

@@ -3,6 +3,6 @@
 
 name: switchyard-provider
 kind: model-provider
-version: 0.1.1
+version: 0.1.2
 description: NVIDIA Switchyard (Beta) sidecar (local and cloud models; one model per Verification-Gated Routing preset)
 author: NVIDIA

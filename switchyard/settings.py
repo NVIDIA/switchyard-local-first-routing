@@ -52,6 +52,7 @@ API_MODE_FORMATS = {
 }
 # Providers whose wire format is fixed, used until setup records the resolved one.
 PROVIDER_FORMATS = {"openai-codex": "openai_responses", "anthropic": "anthropic_messages"}
+OPENAI_API_HOST = "api.openai.com"
 PROVIDER_EXTRA_BODY: Dict[str, Dict[str, Any]] = {"openai-codex": {"store": False}}
 # Providers that refuse a request without ``stream: true`` (Codex answers 400); the tap streams to
 # them and gives a non-streaming caller the completed response.
@@ -407,8 +408,15 @@ def _tier(name: str, raw: Any) -> Tier:
             key_env = str(merged.get("api_key_env") or "").strip()
             if key_env and not _ENV_NAME.match(key_env):
                 raise SettingsError(f"switchyard.{name}.api_key_env must be an environment variable name")
-        # Claude is reached over Anthropic Messages, so the tier's thinking settings reach it.
-        default_format = "anthropic_messages" if source == "url" and "claude" in model.lower() else "openai_chat"
+        # Claude is reached over Anthropic Messages, so the tier's thinking settings reach it. OpenAI's
+        # own API is reached over Responses, as Hermes reaches it: its reasoning models refuse tools on
+        # Chat Completions.
+        if source == "url" and "claude" in model.lower():
+            default_format = "anthropic_messages"
+        elif source == "url" and urlsplit(base_url).hostname == OPENAI_API_HOST:
+            default_format = "openai_responses"
+        else:
+            default_format = "openai_chat"
     fmt = str(merged.get("format") or default_format)
     if fmt not in FORMATS or (source == "managed" and fmt != "openai_chat"):
         allowed = "openai_chat" if source == "managed" else ", ".join(FORMATS)
