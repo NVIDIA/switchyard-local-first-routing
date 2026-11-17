@@ -311,8 +311,19 @@ function firstChoice(name, source, hermes) {
     : { builtIn: false, model: '', provider: '' }
 }
 
+// Switching back to a source restores what was picked there.
 function sourceDraft(name, source, draft, hermes) {
-  const kept = { api_key: draft.api_key, base_url: draft.base_url, source }
+  const picks = { ...draft.picks }
+
+  if (draft.source) {
+    picks[draft.source] = { builtIn: draft.builtIn, model: draft.model, provider: draft.provider }
+  }
+
+  const kept = { api_key: draft.api_key, base_url: draft.base_url, picks, source }
+
+  if (picks[source] && picks[source].model) {
+    return { ...kept, ...picks[source] }
+  }
 
   return source === 'url'
     ? { ...kept, builtIn: false, model: '', provider: '' }
