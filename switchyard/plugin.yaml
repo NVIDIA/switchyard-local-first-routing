@@ -3,7 +3,7 @@
 
 name: nvidia-switchyard
 label: "NVIDIA Switchyard (Beta)"
-version: 0.1.0
+version: 0.1.1
 description: "Beta. Automatic inference routing between local and cloud models, escalating tasks only when needed. Any URL or third-party provider set up in Hermes can serve either model, under that provider's terms and conditions. Runs Switchyard in a loopback sidecar."
 author: NVIDIA
 license: Apache-2.0

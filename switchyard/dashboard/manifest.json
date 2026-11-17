@@ -3,7 +3,7 @@
   "label": "NVIDIA Switchyard (Beta)",
   "description": "Beta. Live NVIDIA Switchyard routing decisions for every preset: current tier, VGR's verification stage, and token spend per tier.",
   "icon": "Activity",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "tab": { "path": "/switchyard", "position": "after:analytics" },
   "entry": "dist/index.js",
   "css": "dist/style.css",
