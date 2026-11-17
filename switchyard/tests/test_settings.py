@@ -19,6 +19,16 @@ def _load(local=None, cloud=None, **extra):
     })
 
 
+def test_each_model_selects_its_preset_with_or_without_the_provider_prefix():
+    cfg = _load(presets=[{"name": "vgr", "algorithm": "vgr"}, {"name": "quick", "algorithm": "vgr"}])
+    expected = {sy_settings.AUTO_MODEL: "vgr", sy_settings.DEFAULT_MODEL: "vgr", "switchyard/quick": "quick",
+                sy_settings.LOCAL_PIN_MODEL: sy_settings.pin_preset("local").name}
+    for model, preset in expected.items():
+        assert cfg.preset_for_model(model).name == preset
+        assert cfg.preset_for_model(model.removeprefix(sy_settings.MODEL_PREFIX)).name == preset
+    assert cfg.preset_for_model("switchyard/missing") is None and cfg.preset_for_model("missing") is None
+
+
 def test_provider_tier_takes_its_format_from_the_provider_and_has_no_url():
     cfg = _load(cloud={"source": "provider", "provider": "openai-codex", "model": "gpt-5.5"})
     assert (cfg.cloud.source, cfg.cloud.base_url, cfg.cloud.format) == ("provider", "", "openai_responses")

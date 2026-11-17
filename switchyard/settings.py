@@ -350,14 +350,20 @@ class SwitchyardSettings:
 
     def preset_for_model(self, model: Any) -> Optional[Preset]:
         """The preset a request's ``model`` selects; ``AUTO_MODEL``, ``switchyard/default`` and an empty
-        model pick the default."""
+        model pick the default. Each model also answers without its ``switchyard/`` prefix, which
+        Hermes drops from ``hermes chat -m switchyard/<model>`` once config.yaml has a
+        ``providers.switchyard`` block."""
         name = str(model or "")
-        if not name or name in (AUTO_MODEL, DEFAULT_MODEL):
+        if not name:
+            return self.default
+        if not name.startswith(MODEL_PREFIX):
+            name = f"{MODEL_PREFIX}{name}"
+        if name in (AUTO_MODEL, DEFAULT_MODEL):
             return self.default
         if name in PIN_MODELS:
             return pin_preset(PIN_MODELS[name])
         for preset in self.presets:
-            if name in (preset.model, preset.name):
+            if name == preset.model:
                 return preset
         return None
 
