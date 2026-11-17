@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Switchyard Local-first Routing for Hermes (beta).
+"""NVIDIA Switchyard for Hermes (beta).
 
 Hermes talks to the ``switchyard`` provider; the provider is a loopback sidecar
 hosting Switchyard in-process over two tiers, a local model and a cloud model.

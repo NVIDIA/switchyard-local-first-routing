@@ -1,4 +1,4 @@
-# Switchyard Local-first Routing plugin for Hermes (Beta)
+# NVIDIA Switchyard plugin for Hermes (Beta)
 
 > **Beta.** Routing, settings and commands may change between releases. Not
 > yet supported for production use.
@@ -31,7 +31,10 @@ commands and a Switchyard page in the dashboard and in Hermes Desktop.
 
 ## Install
 
-**In Hermes Desktop:** open **Capabilities ▸ Plugins**, find **Switchyard** and
+Install this plugin, then open **NVIDIA Switchyard** in the Hermes top left
+sidebar to configure your models.
+
+**In Hermes Desktop:** open **Capabilities ▸ Plugins**, find **NVIDIA Switchyard** and
 click **Install**.
 
 **From a terminal:**
@@ -54,16 +57,16 @@ hermes plugins install file:///path/to/this/repository#switchyard
 ## Set up
 
 **In Hermes Desktop:** under **Capabilities ▸ Plugins**, check that both of
-**Switchyard**'s switches are on: the one under the profile picker (for example
-**Hermes (default)**) turns on Switchyard Local-first Routing for that profile, and
-**Desktop** adds its page and chat notes. Then open **Switchyard** in the sidebar. Its
+**NVIDIA Switchyard**'s switches are on: the one under the profile picker (for example
+**Hermes (default)**) turns on NVIDIA Switchyard for that profile, and
+**Desktop** adds its page and chat notes. Then open **NVIDIA Switchyard** in the sidebar. Its
 setup form picks each model from:
 
-- **Your Hermes models**: a model or signed-in provider Hermes already has.
+- **Existing Provider**: a model or signed-in provider Hermes already has.
   Switchyard uses Hermes's login on each call and doesn't copy the token.
 - **Set up llama.cpp for me**: Hermes downloads a model sized for this machine
   and runs it.
-- **Server URL**: any compatible server. An API key you paste is saved in
+- **Custom URL**: any OpenAI- or Anthropic-compatible server. An API key you paste is saved in
   Hermes's `.env` as `SWITCHYARD_LOCAL_API_KEY` or `SWITCHYARD_CLOUD_API_KEY`.
 
 Leave **Routing algorithm** on **VGR** and click **Save and start Switchyard**.
