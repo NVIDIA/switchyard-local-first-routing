@@ -1047,7 +1047,7 @@ function SidecarCard({ state }) {
     { title: 'Sidecar' },
     h('p', { className: 'text-xs' }, `${routeStatus(state)}.`),
     ['local', 'cloud'].map(name =>
-      line(name, `${config[name].role} (${name}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
+      line(name, `${TIERS[name][0]} (${config[name].role}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
     ),
     state.running && runtime && runtime.version ? line('version', `Switchyard ${runtime.version}`, runtime.location) : null
   )
