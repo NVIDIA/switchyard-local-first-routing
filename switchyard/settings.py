@@ -57,6 +57,7 @@ API_MODE_FORMATS = {
 # Providers whose wire format is fixed, used until setup records the resolved one.
 PROVIDER_FORMATS = {"openai-codex": "openai_responses", "anthropic": "anthropic_messages"}
 OPENAI_API_HOST = "api.openai.com"
+OPENAI_EXTRA_BODY: Dict[str, Any] = {"store": False}
 PROVIDER_EXTRA_BODY: Dict[str, Dict[str, Any]] = {"openai-codex": {"store": False}}
 # Providers that refuse a request without ``stream: true`` (Codex answers 400); the tap streams to
 # them and gives a non-streaming caller the completed response.
@@ -437,7 +438,13 @@ def _tier(name: str, raw: Any) -> Tier:
     extra_body = merged.get("extra_body")
     if extra_body is None:
         claude = fmt == "anthropic_messages" and "claude" in model.lower()
-        extra_body = CLAUDE_EXTRA_BODY if claude else PROVIDER_EXTRA_BODY.get(provider, {})
+        if claude:
+            extra_body = CLAUDE_EXTRA_BODY
+        elif source == "url" and urlsplit(base_url).hostname == OPENAI_API_HOST:
+            # OpenAI keeps a turn unless told not to; Hermes's own OpenAI calls send this too.
+            extra_body = OPENAI_EXTRA_BODY
+        else:
+            extra_body = PROVIDER_EXTRA_BODY.get(provider, {})
     if not isinstance(extra_body, Mapping):
         raise SettingsError(f"switchyard.{name}.extra_body must be a mapping of request fields")
     return Tier(

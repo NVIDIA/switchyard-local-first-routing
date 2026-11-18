@@ -63,13 +63,17 @@ def test_claude_over_anthropic_messages_thinks_adaptively_unless_the_tier_says_o
     assert _load(cloud=cloud).cloud.extra_body == extra_body
 
 
-@pytest.mark.parametrize("cloud, fmt", [
-    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol"}, "openai_responses"),
-    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "format": "openai_chat"}, "openai_chat"),
-    ({"base_url": "https://gateway.example.com/v1", "model": "gpt-6.1-sol"}, "openai_chat"),
+@pytest.mark.parametrize("cloud, fmt, extra_body", [
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol"}, "openai_responses", {"store": False}),
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "format": "openai_chat"}, "openai_chat",
+     {"store": False}),
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "extra_body": {"store": True}},
+     "openai_responses", {"store": True}),
+    ({"base_url": "https://gateway.example.com/v1", "model": "gpt-6.1-sol"}, "openai_chat", {}),
 ])
-def test_a_url_tier_on_openais_own_api_defaults_to_responses(cloud, fmt):
-    assert _load(cloud=cloud).cloud.format == fmt
+def test_a_url_tier_on_openais_own_api_defaults_to_responses_without_storage(cloud, fmt, extra_body):
+    tier = _load(cloud=cloud).cloud
+    assert (tier.format, tier.extra_body) == (fmt, extra_body)
 
 
 def test_any_two_models_route_but_not_the_same_endpoint_twice():
