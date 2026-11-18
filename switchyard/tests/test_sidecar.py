@@ -48,3 +48,39 @@ def test_a_restart_does_not_pass_off_the_old_sidecar_as_its_replacement(monkeypa
 
     monkeypatch.setattr(sidecar, "_kill_recorded", lambda pid=None: running.update(pid=42))
     assert sidecar.restart(_settings(4110)) is True
+
+
+def test_a_url_local_tier_reads_images_when_its_server_reports_vision():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    answers = {"modalities": {"vision": True}}
+
+    class Server(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps(answers).encode() if self.path.startswith("/props") else b"{}"
+            self.send_response(200 if self.path.startswith("/props") else 404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Server)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        tier = sy_settings.load({
+            "local": {"base_url": f"http://127.0.0.1:{server.server_port}/v1", "model": "mock/local"},
+            "cloud": {"base_url": "https://cloud.example/v1", "model": "mock/cloud"},
+        }).local
+        assert sidecar.local_reads_images(tier) is True
+        answers["modalities"] = {"vision": False}
+        assert sidecar.local_reads_images(tier) is False
+        answers.pop("modalities")
+        assert sidecar.local_reads_images(tier) is False
+    finally:
+        server.shutdown()
+    # A server that is not up counts as text-only.
+    assert sidecar.local_reads_images(tier) is False

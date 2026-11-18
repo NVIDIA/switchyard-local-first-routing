@@ -115,8 +115,11 @@ without VGR checks, unless they include images or you chose
 - **No per-message time limit on the local model by default.** Each request
   gets up to 30 minutes before the cloud model takes it. See
   [Bound local thinking time](#bound-local-thinking-time).
-- **Requests with images go to the cloud model.** VGR treats the local model as
-  text-only.
+- **Requests with images go to the local model only if it can read them.**
+  When the sidecar starts, it asks Hermes whether its built-in model has its
+  vision projector, or asks a llama.cpp server for its `/props`. Otherwise
+  those requests go to the cloud model. Restart the sidecar after you add or
+  remove a vision projector.
 - **The cloud model sees your requests.** "Local first" means the local model
   answers first, not that requests stay on your machine: to check an answer,
   the cloud model receives the task and the local answer. VGR masks text that

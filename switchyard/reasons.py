@@ -263,10 +263,10 @@ def explain(
                        "message's first step, so time spent running tools and waiting for you to approve "
                        "them counts too. That was used up, so the rest of this message goes to the cloud. "
                        "The budget resets with the next user message.")
-    if reason == "local_image_unsupported":
+    if reason in ("local_image_unsupported", "local_attachment_unsupported"):
         return _result(reason, served, "Image in the request",
-                       "The request contains an image. VGR treats the local model as text-only, so it went "
-                       "straight to the cloud.")
+                       "The request contains an image or another attachment, and the local model isn't set up "
+                       "to read it, so it went straight to the cloud.")
     if reason == "local_unavailable":
         return _result(reason, served, "Local model unavailable",
                        "The local model server returned an error or could not be reached.")
@@ -340,6 +340,6 @@ def _inferred(turn: Mapping[str, Any], branch: Optional[str], served: str, p: Op
     if outcome == "escalated_without_attempt":
         return _result(None, served, "Sent to the cloud without a local attempt",
                        "Usually because this message's local time budget ran out, an earlier step already "
-                       "escalated, or the request had an image.")
+                       "escalated, or the request had an image the local model can't read.")
     return _result(None, served, "No check confirmed the local answer",
                    "The local answer was not approved, so the cloud model answered instead.", checks(turn, branch))

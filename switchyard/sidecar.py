@@ -189,10 +189,43 @@ def _quiet_stderr() -> Iterator[None]:
         os.close(saved)
 
 
+_PROPS_TIMEOUT_S = 3.0
+
+
+def local_reads_images(tier: sy_settings.Tier) -> bool:
+    """Whether the efficient tier's model reads images: Hermes's own answer for its llama.cpp runtime,
+    the modalities the server reports on llama.cpp's ``/props`` for a URL tier. Unknown counts as no."""
+    if tier.managed:
+        try:
+            from hermes_cli.local_runtime.capabilities import managed_model_supports_vision
+
+            return managed_model_supports_vision(tier.model) is True
+        except Exception as error:
+            logger.info("Switchyard could not ask Hermes whether %s reads images: %s", tier.model, error)
+            return False
+    if tier.source != "url" or tier.format != "openai_chat":
+        return False
+    try:
+        base_url, headers = _account_endpoint(tier)
+        root = re.sub(r"/v1$", "", base_url.rstrip("/"))
+        response = httpx.get(f"{root}/props", params={"model": tier.model}, headers=headers,
+                             timeout=_PROPS_TIMEOUT_S)
+        modalities = response.json().get("modalities") if response.status_code == 200 else None
+    except Exception as error:
+        logger.info("Switchyard could not ask %s whether it reads images: %s", tier.endpoint_label, error)
+        return False
+    return isinstance(modalities, dict) and modalities.get("vision") is True
+
+
+def with_local_vision(cfg: sy_settings.SwitchyardSettings) -> sy_settings.SwitchyardSettings:
+    return dataclasses.replace(cfg, local_reads_images=local_reads_images(cfg.local))
+
+
 def running_toml(cfg: sy_settings.SwitchyardSettings) -> str:
     """The deployment as the sidecar writes it for the installed Switchyard."""
     from .runtime import server_class
 
+    cfg = with_local_vision(cfg)
     try:
         omit = engine_lacks(server_class(), cfg)
     except RuntimeMissing:
@@ -279,10 +312,12 @@ def engine_lacks(Server: Any, cfg: sy_settings.SwitchyardSettings) -> frozenset:
     known = _lacks.get(id(Server))
     if known is not None:
         return known
+    # Probed with every optional key present, so the answer holds whatever the local model reads.
+    probe = dataclasses.replace(cfg, local_reads_images=True)
     omit: set = set()
     for _ in range(len(sy_settings.OPTIONAL_ROUTE_DEFAULTS) + 1):
         try:
-            _parse_routes(Server, cfg, frozenset(omit))
+            _parse_routes(Server, probe, frozenset(omit))
         except Exception as error:
             match = _UNKNOWN_FIELD.search(str(error))
             key = match.group("key") if match else None
@@ -892,6 +927,7 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
     os.environ[sy_settings.TIER_ROUTE_KEY_ENV] = tier_route_key
     directory = state_dir()
     config_path = directory / "switchyard.toml"
+    cfg = with_local_vision(cfg)
     Server = server_class()
     runtime = describe() or {}
     print(f"Switchyard runtime: {runtime.get('project')} {runtime.get('version')} from {runtime.get('location')}",

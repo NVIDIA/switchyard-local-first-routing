@@ -157,11 +157,29 @@ def test_a_provider_that_now_resolves_to_switchyard_or_another_format_is_reporte
 
 def test_vgr_tells_a_new_user_how_long_a_reply_can_take():
     note = sy_settings.setup_note("vgr", _load().default.route)
-    assert "up to 30 minutes" in note and "images always go to the cloud" in note
+    assert "up to 30 minutes" in note and "unless the local model can read images" in note
     assert "up to 90 seconds" in sy_settings.setup_note("vgr", {"deadline_seconds": 90})
     bounded = _load(bounded_local=True).default.route
     assert "up to 5 minutes" in sy_settings.setup_note("vgr", bounded)
     assert sy_settings.setup_note("llm_classifier", {}) is None
+
+
+def test_vgr_lets_the_local_model_attempt_images_only_when_it_reads_them():
+    import dataclasses
+    import tomllib
+
+    def attachments(cfg, **kwargs):
+        routes = tomllib.loads(sy_settings.render_switchyard_toml(cfg, upstream_names=True, **kwargs))["routes"]
+        return routes[cfg.default_preset].get(sy_settings.LOCAL_ATTACHMENTS_KEY)
+
+    cfg = _load()
+    assert attachments(cfg) is None
+    sees = dataclasses.replace(cfg, local_reads_images=True)
+    assert attachments(sees) is True
+    # A build that does not read the key gets none, so its routes still load.
+    assert attachments(sees, omit=frozenset({sy_settings.LOCAL_ATTACHMENTS_KEY})) is None
+    text_only = {"vgr": {"algorithm": "vgr", "options": {sy_settings.LOCAL_ATTACHMENTS_KEY: False}}}
+    assert attachments(dataclasses.replace(_load(presets=text_only), local_reads_images=True)) is False
 
 
 def test_vgr_is_unbounded_unless_bounded_local_or_the_preset_sets_a_limit():

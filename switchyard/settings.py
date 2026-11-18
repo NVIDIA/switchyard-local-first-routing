@@ -118,7 +118,9 @@ UPSTREAM_VGR_KEYS = {
 }
 # Route keys the plugin fills in only where the installed Switchyard reads them; one it does not
 # know would stop every route from loading. A value the user sets is passed on either way.
-OPTIONAL_ROUTE_DEFAULTS = ("compact_handoff",)
+OPTIONAL_ROUTE_DEFAULTS = ("compact_handoff", "efficient_supports_attachments")
+# The VGR route key that lets the efficient tier attempt requests with images; set when its model reads them.
+LOCAL_ATTACHMENTS_KEY = "efficient_supports_attachments"
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,95}$")
 _PRIVATE_SUFFIXES = (".local", ".lan", ".home.arpa", ".internal")
@@ -330,6 +332,8 @@ class SwitchyardSettings:
     pin: str = ""
     bounded_local: bool = False
     subscription_consent: Tuple[str, ...] = ()
+    # Found when the sidecar starts, not saved: the efficient tier's model reads images.
+    local_reads_images: bool = False
 
     @property
     def front_base_url(self) -> str:
@@ -711,7 +715,8 @@ def setup_note(algorithm: str, route: Mapping[str, Any]) -> Optional[str]:
     seconds = int(route.get("deadline_seconds") or ALGORITHMS["vgr"].defaults["deadline_seconds"])
     wait = f"up to {seconds // 60} minute{'s' if seconds != 60 else ''}" if seconds % 60 == 0 else f"up to {seconds} seconds"
     return (f"VGR checks each local answer before showing any of it, so a reply can take {wait} to appear, "
-            "with no text streaming in the meantime. Requests with images always go to the cloud model.")
+            "with no text streaming in the meantime. Requests with images go to the cloud model unless the "
+            "local model can read images.")
 
 
 def _toml_value(value: Any) -> str:
@@ -771,8 +776,11 @@ def render_switchyard_toml(settings: SwitchyardSettings, *, with_credentials: bo
             target["extra_body"] = tier.extra_body
         lines += _toml_table(f"targets.{name}", target)
     for preset in (*settings.presets, *(pin_preset(tier) for tier in PIN_TARGETS)):
+        values = preset.route
+        if preset.algorithm == "vgr" and settings.local_reads_images:
+            values.setdefault(LOCAL_ATTACHMENTS_KEY, True)
         route = {"id": preset.model, "type": preset.algorithm,
-                 **{k: v for k, v in preset.route.items() if k not in omit or k in preset.options}}
+                 **{k: v for k, v in values.items() if k not in omit or k in preset.options}}
         if upstream_names and preset.algorithm == "vgr":
             route = {UPSTREAM_VGR_KEYS.get(key, key): value for key, value in route.items()}
         lines += _toml_table(f"routes.{preset.name}", route)
