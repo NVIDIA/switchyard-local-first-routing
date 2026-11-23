@@ -729,7 +729,15 @@ def _handle(args: argparse.Namespace) -> int:
                       else f"{sy_settings.PRODUCT_LABEL} sidecar failed to start; see {sidecar.state_dir() / 'sidecar.log'}")
             return 1
         if command == "stop":
-            return 0 if sidecar.stop() else 1
+            cfg = sidecar.load_settings()
+            if not sidecar.listening(cfg):
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar is not running.")
+                return 0
+            if sidecar.stop(cfg):
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar stopped.")
+                return 0
+            print(f"{sy_settings.PRODUCT_LABEL} sidecar did not stop; see {sidecar.state_dir() / 'sidecar.log'}")
+            return 1
         if command == "config":
             print(sidecar.running_toml(sidecar.load_settings()), end="")
             return 0

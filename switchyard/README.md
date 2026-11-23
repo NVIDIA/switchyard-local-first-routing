@@ -118,8 +118,9 @@ without VGR checks, unless they include images or you chose
 - **Requests with images go to the local model only if it can read them.**
   When the sidecar starts, it asks Hermes whether its built-in model has its
   vision projector, or asks a llama.cpp server for its `/props`. Otherwise
-  those requests go to the cloud model. Restart the sidecar after you add or
-  remove a vision projector.
+  those requests go to the cloud model, and the sidecar asks again every 30
+  seconds, so a server started later or a projector added later is picked up
+  without a restart. Restart the sidecar after you remove a vision projector.
 - **The cloud model sees your requests.** "Local first" means the local model
   answers first, not that requests stay on your machine: to check an answer,
   the cloud model receives the task and the local answer. VGR masks text that

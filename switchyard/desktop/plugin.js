@@ -55,6 +55,29 @@ const MODES = { '': 'Auto', local: 'Local Only', cloud: 'Cloud Only' }
 let rest = null
 let os = null
 
+// settings._private_host, which lets these hosts use http.
+const PRIVATE_SUFFIXES = ['.local', '.lan', '.home.arpa', '.internal']
+const PRIVATE_IPV4 = /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/
+
+function privateHost(url) {
+  let host
+
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return false
+  }
+
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    (host.includes(':') && /^(f[cd]|fe80:)/.test(host)) ||
+    PRIVATE_SUFFIXES.some(s => host.endsWith(s)) ||
+    (!host.includes('.') && !host.includes(':')) ||
+    PRIVATE_IPV4.test(host)
+  )
+}
+
 const api = (path, opts) => (rest ? rest(path, opts) : Promise.reject(new Error('Switchyard plugin is not loaded')))
 const errorText = error => (error && error.message) || String(error)
 const sleep = ms => new Promise(resolve => window.setTimeout(resolve, ms))
@@ -586,7 +609,9 @@ function TierFields({ name, draft, onChange, onKeyDown, hermes, openSettings }) 
           }),
           h(Field, {
             key: 'key',
-            label: 'API key (not needed on this machine or network; empty keeps the saved key)',
+            label: privateHost(draft.base_url)
+              ? 'API key (usually not needed for a server on this machine or network; empty keeps the saved key)'
+              : 'API key (empty keeps the saved key)',
             onChange: e => set({ api_key: e.target.value }),
             onKeyDown,
             type: 'password',
@@ -1314,8 +1339,13 @@ function foregroundTotals(totals) {
   }
 }
 
+function backgroundCalls(bg) {
+  return bg && bg.calls ? ` \u00b7 ${bg.calls} more in background tasks` : ''
+}
+
 function SplitCard({ state }) {
   const totals = foregroundTotals(state.totals)
+  const bg = state.totals.background
   let routing = 0
   let work = 0
 
@@ -1349,7 +1379,8 @@ function SplitCard({ state }) {
           h(
             'p',
             { className: 'text-xs text-muted-foreground' },
-            `${fmt(totals[tier].prompt)} in \u00b7 ${fmt(totals[tier].completion)} out \u00b7 ${totals[tier].calls} calls`
+            `${fmt(totals[tier].prompt)} in \u00b7 ${fmt(totals[tier].completion)} out \u00b7 ${totals[tier].calls} calls` +
+              backgroundCalls(bg && bg[tier])
           )
         )
       )
@@ -1360,7 +1391,7 @@ function SplitCard({ state }) {
     h(
       'p',
       { className: 'text-xs text-muted-foreground' },
-      `${served} turns \u00b7 routing calls ${ms(routing)} vs task work ${ms(work)} (classifiers, judges and verifiers count as routing; background tasks left out)`
+      `${served} turns \u00b7 routing calls ${ms(routing)} vs task work ${ms(work)} (classifiers, judges and verifiers count as routing). Background tasks, such as titles and Hermes's image step, are counted apart.`
     )
   )
 }
