@@ -26,11 +26,11 @@ _FIRST_UPSTREAM = (0, 4)
 _RELEASE = re.compile(r"^(\d+)\.(\d+)")
 _MODULE = "switchyard_rust"
 # The release plugin.yaml pins. PyPI never replaces a released file, so its files are fixed.
-_PINNED = "0.4.0a1"
+_PINNED = "0.4.0"
 _PACKAGES = ("switchyard", "switchyard_rust")
 # Each wheel holds one native module: the .pyd on Windows, the .so elsewhere.
 _NATIVE = ("switchyard_rust/_switchyard_rust.abi3.so", "switchyard_rust/_switchyard_rust.pyd")
-# SHA-256 of every file in the six published 0.4.0a1 wheels, by path under site-packages. The
+# SHA-256 of every file in the six published 0.4.0 wheels, by path under site-packages. The
 # Windows wheels' Python files differ in line endings, and each platform's native module differs.
 _RELEASE_FILES: Dict[str, FrozenSet[str]] = {
     "switchyard/__init__.py": frozenset({
@@ -38,38 +38,46 @@ _RELEASE_FILES: Dict[str, FrozenSet[str]] = {
         "b192b7077c10b10efefc314f815cf10376c9ca67e901bf6d2903d47579f012f1",
     }),
     "switchyard/libsy/__init__.py": frozenset({
-        "2d59832883fbbebe913b3f8f33adbb8e5725d1246e3df7bfb9c6385b7d580b85",
-        "3d6603701beaecaba22b495dec71f53bb429124c5c0b8799bd9e0dd1f3949fb5",
+        "e607c609dd74dc8eef4bd5e3b971d4e1e699b52794cc430d80f4cc927652ab73",
+        "fb85157198eb7adf910dbe3bafe5a3b78caebe09fc962439782f9f9eacca4e9b",
     }),
     "switchyard/libsy/algorithms.py": frozenset({
         "3abd2152af929fc1c8467d6dfbfec820d70f7952a88089fbba184058f432ef8d",
         "4ac5347284e2c6c26bdd63846da3b9f3852fca2b2abb6f9456fcb4c5a6e44185",
+    }),
+    "switchyard/translation.py": frozenset({
+        "415ff086488628742b0c7fe64cbc99b7caa80c1cfa09e45cf3c4bdf697b2ecbe",
+        "6b812738aa76134b3e484f15cabdb68e5d753689b68b475d617a303a55efefa3",
     }),
     "switchyard_rust/__init__.py": frozenset({
         "bf318bbd0080f7f225a8a31a5a17a79234a8a4d1e96331c085bc640c2bd11263",
         "c7d706f2440ed6fe8e56790fb545ee81533fbf4ceeef45b860bcad82e97e66c4",
     }),
     "switchyard_rust/_libsy_async.py": frozenset({
-        "066b9ead958bbeaff36e1a1e86d0856ac096e02b6613473dfb6fe9a538c4d69e",
-        "498295319b647933c5cd0077abf53471af5f55780a9de816a2358e41adcbc521",
+        "5035577e8bbe06f132656076de43a0da04a2aba1fa5368eec973c6e60be44bee",
+        "c327421c07cb1cc08ad0f700113d43e138391ac6fffd84b8140eabe25b7eb574",
     }),
     "switchyard_rust/_native.py": frozenset({
         "4ea429285a34d5a97702ee448eef80ad5b4f15662a03d5c2206a83f2aa0e5482",
         "f6718707a7071cce525c57db6681b02b115af022781f847b46bde1f729e3ceb1",
     }),
     "switchyard_rust/_switchyard_rust.abi3.so": frozenset({
-        "03b47de76c3c22eb0c3836a4104527c6eafc69b839617866a872bb43e3ebefa3",
-        "6c20a0c63019cb702a24afe602ddcf40e3a2420a80c4435e9ddbc9132f2b3d1b",
-        "7ea87db246dccb11e360e288cb455a8de0dfe196fb20b186b12c8858a611f587",
-        "dfcae93d5e238985fa73597deb4bae1dd4d5f05212d9c16c73814f1b366f02cc",
+        "2c2ec71e9b92aa56cad699456b833cec6c1d474113f2e4fd55eeb12556bf8207",
+        "d63c902d0a94dcf144511e77575ce5feed8268508f34202206dda472b3f7a987",
+        "d7d60518a087e42efa4c279bdeb508fe2d17a3e5beb3a2aa297576cf045214d8",
+        "e680d19b89a2b15aeae7ee690c589be14b1f219d07378f498f68f1ed31baeb04",
     }),
     "switchyard_rust/_switchyard_rust.pyd": frozenset({
-        "64d9d137ed6a73f31503f762ab8364f3608d251af9dbfc80c1671ea54ab18463",
-        "b6fccc3df93374e14f8950ec16c6cfd3fb0dc6e460875449c870563ef0ae9943",
+        "d3cc515019cc3ed08f4a9d240e8087add9515488c600677c001da7e9348ecfe0",
+        "ed1ba5310d4c39b41a8694edf2fcba5e9c4924f051509bc94f74711d2ff6036b",
+    }),
+    "switchyard_rust/_translation_stream.py": frozenset({
+        "9f2fd7a3cc524c70681d39000688cb7903437d5bc52050a730ec77a08a424d1f",
+        "e5f13d9db51ca760342b271acfec61bd5793e45f044433267c85d5ae4cb33052",
     }),
     "switchyard_rust/libsy.py": frozenset({
-        "2db4ff49629bd8471a0b59c90d393f53895e2927598fad7cad7cd352b11ed356",
-        "d40adc27fbd20aca7466b78981c2ec5155f908b67a3382820b935b0ccfb6f325",
+        "f0bbb48619d66a0b7a4e27cd16a31949a24da47fda4c4745b70d892e28750faf",
+        "f1dc26d9f02841ca2aec7887162f03c0fd5d91bb3279b270846707e3e9c0d9a4",
     }),
     "switchyard_rust/py.typed": frozenset({
         "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
@@ -78,6 +86,10 @@ _RELEASE_FILES: Dict[str, FrozenSet[str]] = {
     "switchyard_rust/server.py": frozenset({
         "444bd4bce8cef3ce9554dda133c267a5636730089d280081f6f3b46fff40f21b",
         "649a0d0b79bd250f87cd5846e15c18681aba09182450a90c80fbf2e84658df69",
+    }),
+    "switchyard_rust/translation.py": frozenset({
+        "5111f2762246f97e20faa951f28cd75d70e5eb7ebb60b840090ce90e8814af63",
+        "d3c4a9627dba1160b55065009dcf3b364b5aadb6c1813244ad63eea5c3286a21",
     }),
 }
 _REINSTALL = "reinstall the plugin with `hermes plugins install nvidia-switchyard --force`, which installs it"

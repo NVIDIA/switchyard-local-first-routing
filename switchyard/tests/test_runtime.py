@@ -64,10 +64,10 @@ def test_only_the_published_release_files_pass(tmp_path):
 
 
 def test_a_build_that_is_not_the_pinned_release_is_not_loaded(monkeypatch):
-    monkeypatch.setattr(runtime, "installed", lambda: ("nemo-switchyard", "0.4.0"))
-    with pytest.raises(runtime.RuntimeMissing, match="pinned to 0.4.0a1"):
-        runtime.select()
     monkeypatch.setattr(runtime, "installed", lambda: ("nemo-switchyard", "0.4.0a1"))
+    with pytest.raises(runtime.RuntimeMissing, match="pinned to 0.4.0;"):
+        runtime.select()
+    monkeypatch.setattr(runtime, "installed", lambda: ("nemo-switchyard", "0.4.0"))
     monkeypatch.setattr(runtime, "unverified", lambda site: "switchyard_rust/server.py differs from the release")
     with pytest.raises(runtime.RuntimeMissing, match="not the published release: switchyard_rust/server.py differs"):
         runtime.select()

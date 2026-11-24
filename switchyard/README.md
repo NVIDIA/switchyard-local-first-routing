@@ -239,12 +239,12 @@ sidecar.
 ## Switchyard runtime
 
 Switchyard itself is the `nemo-switchyard` package from
-[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard). VGR ships in it from 0.4.0,
-starting with the 0.4.0 alpha releases. The plugin declares it as a Python dependency
-pinned to one release (`nemo-switchyard==0.4.0a1` in `plugin.yaml`). Hermes installs
-it from PyPI, together with the plugin, into Hermes's own Python environment. The
+[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard). VGR ships in it from 0.4.0.
+The plugin declares it as a Python dependency pinned to one release
+(`nemo-switchyard==0.4.0` in `plugin.yaml`). Hermes installs it from PyPI, together
+with the plugin, into Hermes's own Python environment. The
 plugin downloads nothing itself. Before the sidecar loads Switchyard, it checks every
-installed Switchyard file against the SHA-256 of the published 0.4.0a1 wheels, and
+installed Switchyard file against the SHA-256 of the published 0.4.0 wheels, and
 does not start if any file differs, is missing or was added. The `runtime:` line of
 `hermes switchyard status` shows the package and version serving.
 
@@ -272,7 +272,7 @@ cd hermes-agent
 cp -r ../<this repository>/switchyard plugins/switchyard
 cp -r ../<this repository>/switchyard/provider plugins/model-providers/switchyard
 python -m pm.build_env --source . --out .venv --group dev --group test
-uv pip install --python .venv/bin/python "nemo-switchyard==0.4.0a1"
+uv pip install --python .venv/bin/python "nemo-switchyard==0.4.0"
 .venv/bin/python -m pytest plugins/switchyard/tests
 ```
 

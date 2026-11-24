@@ -8,7 +8,7 @@ description: "Beta. Automatic inference routing between local and cloud models, 
 author: NVIDIA
 license: Apache-2.0
 python_dependencies:
-  - nemo-switchyard==0.4.0a1
+  - nemo-switchyard==0.4.0
 provides_hooks:
   - pre_api_request
   - post_api_request
