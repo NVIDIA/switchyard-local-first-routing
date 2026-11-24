@@ -221,18 +221,24 @@ def _choice(option: Mapping[str, Any], model: str) -> Dict[str, str]:
 def _defaults(options: List[Dict[str, Any]], current: Optional[Dict[str, Any]]) -> Dict[str, Optional[Dict[str, str]]]:
     """Each tier's starting choice: efficient, a local model; capable, a remote one.
 
-    Hermes's current model fills the tier it belongs to. The efficient tier
-    otherwise takes the llama.cpp model one-click setup downloaded, then any
-    other local endpoint; the capable tier takes the first signed-in remote
+    The efficient tier takes a model built into Hermes (its llama.cpp runtime),
+    Hermes's current model if it is one, then Hermes's current model if it is
+    another local endpoint, then any other local endpoint. The capable tier takes
+    Hermes's current model if it is remote, else the first signed-in remote
     provider's default model.
     """
     signed_in = [o for o in options if o["authenticated"]]
     by_id = {o["provider"]: o for o in signed_in}
     held = by_id.get(current["provider"]) if current else None
-    local = _choice(held, current["model"]) if held and held["local"] else None
+    local = _choice(held, current["model"]) if held and held["source"] == "managed" else None
     cloud = _choice(held, current["model"]) if held and not held["local"] else None
     if local is None:
-        found = [o for o in signed_in if o["source"] == "managed"] or [o for o in signed_in if o["local"]]
+        found = [o for o in signed_in if o["source"] == "managed"]
+        local = _choice(found[0], found[0]["default_model"]) if found else None
+    if local is None and held and held["local"]:
+        local = _choice(held, current["model"])
+    if local is None:
+        found = [o for o in signed_in if o["local"]]
         local = _choice(found[0], found[0]["default_model"]) if found else None
     if cloud is None:
         found = [o for o in signed_in if not o["local"]]

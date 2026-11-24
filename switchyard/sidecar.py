@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 _STARTUP_TIMEOUT_S = 20.0
 # How long a restart waits for the old sidecar to stop answering before it kills it.
 _RESTART_WAIT_S = 10.0
+_STOP_PROBE_TIMEOUT_S = 3.0
+# How often a running sidecar asks again whether the local model reads images, while it doesn't.
+_VISION_RECHECK_S = 30.0
 # Hermes's agent.local_stream_stale_timeout default.
 _HERMES_LOCAL_STREAM_S = 900
 # Past a VGR deadline, time for the cloud model to start answering.
@@ -189,10 +192,49 @@ def _quiet_stderr() -> Iterator[None]:
         os.close(saved)
 
 
+_PROPS_TIMEOUT_S = 3.0
+
+
+def local_reads_images(tier: sy_settings.Tier) -> bool:
+    """Whether the efficient tier's model reads images: Hermes's own answer for its llama.cpp runtime,
+    the modalities the server reports on llama.cpp's ``/props`` for a URL tier. Unknown counts as no."""
+    if tier.managed:
+        try:
+            from hermes_cli.local_runtime.capabilities import managed_model_supports_vision
+
+            return managed_model_supports_vision(tier.model) is True
+        except Exception as error:
+            logger.info("Switchyard could not ask Hermes whether %s reads images: %s", tier.model, error)
+            return False
+    if tier.source != "url" or tier.format != "openai_chat":
+        return False
+    try:
+        base_url, headers = _account_endpoint(tier)
+        root = re.sub(r"/v1$", "", base_url.rstrip("/"))
+        response = httpx.get(f"{root}/props", params={"model": tier.model}, headers=headers,
+                             timeout=_PROPS_TIMEOUT_S)
+        modalities = response.json().get("modalities") if response.status_code == 200 else None
+    except Exception as error:
+        logger.info("Switchyard could not ask %s whether it reads images: %s", tier.endpoint_label, error)
+        return False
+    return isinstance(modalities, dict) and modalities.get("vision") is True
+
+
+def with_local_vision(cfg: sy_settings.SwitchyardSettings) -> sy_settings.SwitchyardSettings:
+    return dataclasses.replace(cfg, local_reads_images=local_reads_images(cfg.local))
+
+
 def running_toml(cfg: sy_settings.SwitchyardSettings) -> str:
-    """The deployment as the sidecar writes it for the installed Switchyard."""
+    """The deployment the running sidecar uses; without one, what a sidecar started now would write
+    for the installed Switchyard. The running one keeps what it found when it started or last looked."""
     from .runtime import server_class
 
+    if health(cfg):
+        try:
+            return (state_dir() / "switchyard.toml").read_text(encoding="utf-8")
+        except OSError:
+            pass
+    cfg = with_local_vision(cfg)
     try:
         omit = engine_lacks(server_class(), cfg)
     except RuntimeMissing:
@@ -279,10 +321,12 @@ def engine_lacks(Server: Any, cfg: sy_settings.SwitchyardSettings) -> frozenset:
     known = _lacks.get(id(Server))
     if known is not None:
         return known
+    # Probed with every optional key present, so the answer holds whatever the local model reads.
+    probe = dataclasses.replace(cfg, local_reads_images=True)
     omit: set = set()
     for _ in range(len(sy_settings.OPTIONAL_ROUTE_DEFAULTS) + 1):
         try:
-            _parse_routes(Server, cfg, frozenset(omit))
+            _parse_routes(Server, probe, frozenset(omit))
         except Exception as error:
             match = _UNKNOWN_FIELD.search(str(error))
             key = match.group("key") if match else None
@@ -390,11 +434,31 @@ def configure(
     if make_default:
         _remember_previous_model()
         set_config_value("model.provider", sy_settings.PROVIDER)
-        set_config_value("model.default", cfg.default.model)
+        set_config_value("model.default", sy_settings.AUTO_MODEL)
         set_config_value("model.base_url", cfg.front_base_url)
     _fit_side_tasks(cfg, pin=make_default)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
+    _refresh_model_menu()
     return cfg
+
+
+def _refresh_model_menu() -> None:
+    """Drops Hermes's cached list of Switchyard's models, which it would otherwise show for up to an hour."""
+    try:
+        from hermes_cli.models import clear_provider_models_cache
+
+        clear_provider_models_cache(sy_settings.PROVIDER)
+    except Exception as error:  # an older Hermes without the cache; the menu catches up on its own
+        logger.debug("Switchyard could not refresh Hermes's model menu: %s", error)
+
+
+def _use_auto_model(cfg: sy_settings.SwitchyardSettings, model: Mapping[str, Any]) -> None:
+    """Moves Hermes from the default preset's own model, which an older setup gave it, to AUTO_MODEL.
+    Both route the same way; a model the user picked for themselves stays."""
+    from hermes_cli.config import set_config_value
+
+    if model.get("default") == cfg.default.model:
+        set_config_value("model.default", sy_settings.AUTO_MODEL)
 
 
 def update_hermes_settings() -> bool:
@@ -413,9 +477,12 @@ def update_hermes_settings() -> bool:
     if isinstance(applied, int) and applied >= sy_settings.HERMES_SETTINGS_REVISION:
         return False
     cfg = load_settings()
+    if default:
+        _use_auto_model(cfg, model)
     _fit_stream_timeouts(cfg)
     _fit_side_tasks(cfg, pin=default)
     sy_settings.save_setting((sy_settings.HERMES_SETTINGS_KEY,), sy_settings.HERMES_SETTINGS_REVISION)
+    _refresh_model_menu()
     return True
 
 
@@ -869,11 +936,13 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
     os.environ[sy_settings.TIER_ROUTE_KEY_ENV] = tier_route_key
     directory = state_dir()
     config_path = directory / "switchyard.toml"
+    cfg = with_local_vision(cfg)
     Server = server_class()
     runtime = describe() or {}
     print(f"Switchyard runtime: {runtime.get('project')} {runtime.get('version')} from {runtime.get('location')}",
           file=sys.stderr, flush=True)
-    _write_private(config_path, sy_settings.render_switchyard_toml(cfg, omit=engine_lacks(Server, cfg)))
+    omit = engine_lacks(Server, cfg)
+    _write_private(config_path, sy_settings.render_switchyard_toml(cfg, omit=omit))
     try:
         server = Server(str(config_path), port=0)
     except Exception as error:
@@ -930,16 +999,60 @@ def serve(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> int:
             signal.signal(signum, lambda *_: stop.set())
         except (ValueError, OSError):
             pass
+    servers = [server]
+    watch_vision = may_read_images_later(cfg, omit)
+    next_check = time.monotonic() + _VISION_RECHECK_S
     try:
         while not stop.wait(0.5):
-            pass
+            if not watch_vision or time.monotonic() < next_check:
+                continue
+            next_check = time.monotonic() + _VISION_RECHECK_S
+            replacement = adopt_local_vision(cfg, Server, config_path, omit, tap)
+            if replacement is None:
+                continue
+            # The old engine stays open until shutdown, so a turn already on it finishes there.
+            servers.append(replacement)
+            watch_vision = False
+            _write_private(directory / "sidecar.json", json.dumps({
+                "pid": os.getpid(), "port": cfg.port, "switchyard": replacement.base_url, "started": time.time(),
+            }))
     finally:
         decisions.stop()
         tap.shutdown()
         tap.server_close()
-        server.close()
+        for each in servers:
+            each.close()
         (directory / "sidecar.json").unlink(missing_ok=True)
     return 0
+
+
+def may_read_images_later(cfg: sy_settings.SwitchyardSettings, omit: frozenset) -> bool:
+    """Whether a local model that couldn't read images when the sidecar started might later, and VGR
+    would then let it take them: a llama.cpp server started after the sidecar, or a projector added."""
+    tier = cfg.local
+    return (not cfg.local_reads_images
+            and sy_settings.LOCAL_ATTACHMENTS_KEY not in omit
+            and (tier.managed or (tier.source == "url" and tier.format == "openai_chat"))
+            and any(p.algorithm == "vgr" for p in cfg.presets))
+
+
+def adopt_local_vision(cfg: sy_settings.SwitchyardSettings, Server: Any, config_path: Path,
+                       omit: frozenset, tap: Any) -> Optional[Any]:
+    """Once the local model reads images, start a Switchyard that lets it take them and send new requests
+    there; None while it still can't."""
+    if not local_reads_images(cfg.local):
+        return None
+    seeing = dataclasses.replace(cfg, local_reads_images=True)
+    _write_private(config_path, sy_settings.render_switchyard_toml(seeing, omit=omit))
+    try:
+        server = Server(str(config_path), port=0)
+    except Exception as error:
+        logger.warning("Switchyard could not restart with images on the local model: %s", error)
+        _write_private(config_path, sy_settings.render_switchyard_toml(cfg, omit=omit))
+        return None
+    tap.switchyard_url = server.base_url
+    logger.info("The local model now reads images; VGR lets it take image requests")
+    return server
 
 
 def _serve_refusal(cfg: sy_settings.SwitchyardSettings, token: str, refusal: str) -> int:
@@ -1250,7 +1363,30 @@ def set_pin(pin: Any) -> Dict[str, Any]:
     return {"pin": value, "live": live}
 
 
+def listening(cfg: sy_settings.SwitchyardSettings) -> bool:
+    """Whether anything still accepts connections on ``cfg``'s port. A slow answer counts: a sidecar
+    busy with a request can miss a probe. Windows takes about 2 s to refuse a closed loopback port."""
+    try:
+        httpx.get(f"{cfg.tap_url}/monitor/health", timeout=_STOP_PROBE_TIMEOUT_S)
+    except httpx.ConnectError:
+        return False
+    except httpx.HTTPError:
+        return True
+    return True
+
+
+def _stopped_within(cfg: sy_settings.SwitchyardSettings, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while True:
+        if not listening(cfg):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def stop(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> bool:
+    """Stop the sidecar on ``cfg``'s port; False when its port still answers afterwards."""
     cfg = cfg or load_settings()
     try:
         httpx.post(
@@ -1260,12 +1396,10 @@ def stop(cfg: Optional[sy_settings.SwitchyardSettings] = None) -> bool:
         )
     except httpx.HTTPError:
         pass
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        if not health(cfg, timeout=0.5) and not refusing(cfg, timeout=0.5):
-            return True
-        time.sleep(0.2)
-    return _kill_recorded()
+    if _stopped_within(cfg, 5.0):
+        return True
+    _kill_recorded()
+    return _stopped_within(cfg, 3.0)
 
 
 def _kill_recorded(pid: Optional[int] = None) -> bool:

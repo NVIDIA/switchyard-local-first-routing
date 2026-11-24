@@ -355,8 +355,9 @@ def _setup_parser(parser: argparse.ArgumentParser) -> None:
     delete = sub.add_parser("delete", help="Delete a preset")
     delete.add_argument("name")
 
-    pin = sub.add_parser("pin", help="Send every request to one tier, or route normally again")
-    pin.add_argument("tier", choices=("local", "cloud", "off"), help="local or cloud pins to that tier; off routes with the preset")
+    pin = sub.add_parser("pin", help="Switch to Local Only or Cloud Only, or back to Auto")
+    pin.add_argument("tier", choices=("local", "cloud", "off"),
+                     help="local: Local Only; cloud: Cloud Only; off: Auto, which routes with the preset")
 
     sub.add_parser("serve", help="Run the Switchyard sidecar in the foreground")
     sub.add_parser("start", help="Start the Switchyard sidecar in the background")
@@ -473,7 +474,7 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     print(f"{sy_settings.PRODUCT_LABEL} configured: local {cfg.local.model}, cloud {cfg.cloud.model}; "
           f"default preset {preset.name} ({sy_settings.ALGORITHMS[preset.algorithm].label}).")
     if not args.no_default:
-        print(f"Hermes now routes through {sy_settings.PRODUCT_NAME} ({preset.model} at {cfg.front_base_url}).")
+        print(f"Hermes now routes through {sy_settings.PRODUCT_NAME} ({sy_settings.AUTO_MODEL} at {cfg.front_base_url}).")
         print(f"{sy_settings.PRODUCT_NAME} is in beta: its routing and settings may change between releases.")
     note = sy_settings.setup_note(preset.algorithm, preset.route)
     if note:
@@ -495,7 +496,7 @@ def _cmd_list() -> int:
 
     cfg = sidecar.load_settings()
     print(f"Tiers: local {cfg.local.model}{' (llama.cpp)' if cfg.local.managed else ''}, cloud {cfg.cloud.model}")
-    print("Presets (select with /model <name> --provider switchyard):")
+    print(f"Presets (select with /model <name> --provider switchyard; {sy_settings.AUTO_MODEL} selects the default):")
     for preset in cfg.presets:
         marker = "*" if preset.name == cfg.default_preset else " "
         overrides = ", ".join(f"{k}={json.dumps(v)}" for k, v in preset.options.items())
@@ -586,7 +587,8 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print("  Desktop page: not loaded. If Hermes Desktop is open with no Switchyard in its sidebar, "
               "turn on Switchyard's Desktop switch under Capabilities > Plugins")
     if state.get("pin"):
-        print(f"  pinned: every request goes to {state['pin']} (`hermes switchyard pin off` to route normally)")
+        print(f"  mode: {sy_settings.MODES[state['pin']]}, every request goes to the {state['pin']} model "
+              "(`hermes switchyard pin off` for Auto)")
     bound, flip = (("bounded", "--no-bounded-local") if cfg.bounded_local
                    else (f"unbounded per message, {sy_settings.UNBOUNDED_DEADLINE_SECONDS // 60} min per request", "--bounded-local"))
     print(f"  local thinking time: {bound} (`hermes switchyard setup {flip}` to change)")
@@ -703,12 +705,13 @@ def _handle(args: argparse.Namespace) -> int:
             cfg = sidecar.load_settings()
             if result["pin"]:
                 tier = getattr(cfg, result["pin"])
-                print(f"{sy_settings.PRODUCT_NAME} pinned: every request goes to the "
-                      f"{sy_settings.ROLES[result['pin']]} model {tier.model}.")
+                print(f"{sy_settings.PRODUCT_NAME}: {sy_settings.MODES[result['pin']]}. Every request goes to the "
+                      f"{result['pin']} ({sy_settings.ROLES[result['pin']]}) model {tier.model}.")
             else:
-                print(f"{sy_settings.PRODUCT_NAME} uses the selected preset again (default {cfg.default_preset}).")
+                print(f"{sy_settings.PRODUCT_NAME}: Auto, routing with the selected preset "
+                      f"(default {cfg.default_preset}).")
             if not result["live"]:
-                print("The sidecar is not running; the pin applies when it starts.")
+                print("The sidecar is not running; the mode applies when it starts.")
             return 0
         if command == "serve":
             return sidecar.serve()
@@ -726,7 +729,15 @@ def _handle(args: argparse.Namespace) -> int:
                       else f"{sy_settings.PRODUCT_LABEL} sidecar failed to start; see {sidecar.state_dir() / 'sidecar.log'}")
             return 1
         if command == "stop":
-            return 0 if sidecar.stop() else 1
+            cfg = sidecar.load_settings()
+            if not sidecar.listening(cfg):
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar is not running.")
+                return 0
+            if sidecar.stop(cfg):
+                print(f"{sy_settings.PRODUCT_LABEL} sidecar stopped.")
+                return 0
+            print(f"{sy_settings.PRODUCT_LABEL} sidecar did not stop; see {sidecar.state_dir() / 'sidecar.log'}")
+            return 1
         if command == "config":
             print(sidecar.running_toml(sidecar.load_settings()), end="")
             return 0

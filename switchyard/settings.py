@@ -33,6 +33,10 @@ PROVIDER = "switchyard"
 MODEL_PREFIX = "switchyard/"
 # Resolved by the sidecar to whichever preset is the default when the request arrives.
 DEFAULT_MODEL = f"{MODEL_PREFIX}default"
+# The model picker's automatic choice and the model setup gives Hermes, resolved as DEFAULT_MODEL is.
+# Hermes shows a model by the part after the provider, so this reads "NVIDIA Switchyard"; preset
+# names are lowercase, so none can take it.
+AUTO_MODEL = f"{MODEL_PREFIX}NVIDIA-Switchyard"
 TOKEN_ENV = "SWITCHYARD_API_KEY"
 # Set only inside the sidecar process: the key Switchyard sends on its calls to the tap's tier routes.
 TIER_ROUTE_KEY_ENV = "SWITCHYARD_TIER_ROUTE_KEY"
@@ -53,6 +57,7 @@ API_MODE_FORMATS = {
 # Providers whose wire format is fixed, used until setup records the resolved one.
 PROVIDER_FORMATS = {"openai-codex": "openai_responses", "anthropic": "anthropic_messages"}
 OPENAI_API_HOST = "api.openai.com"
+OPENAI_EXTRA_BODY: Dict[str, Any] = {"store": False}
 PROVIDER_EXTRA_BODY: Dict[str, Dict[str, Any]] = {"openai-codex": {"store": False}}
 # Providers that refuse a request without ``stream: true`` (Codex answers 400); the tap streams to
 # them and gives a non-streaming caller the completed response.
@@ -63,6 +68,8 @@ PIN_TARGETS = ("local", "cloud")
 PIN_PRESET_PREFIX = "pin-"
 # The model picker's single-tier choices, named by role; they serve through the pin routes.
 PIN_MODELS = {f"{MODEL_PREFIX}only-{ROLES[tier]}": tier for tier in PIN_TARGETS}
+# What the plugin page and CLI call each pin value.
+MODES = {"": "Auto", "local": "Local Only", "cloud": "Cloud Only"}
 LOCAL_PIN_MODEL = f"{MODEL_PREFIX}only-{ROLES['local']}"
 # Hermes auxiliary tasks setup sends straight to LOCAL_PIN_MODEL: session titles and smart approval.
 PINNED_TASKS = ("title_generation", "approval")
@@ -78,7 +85,7 @@ TITLE_TIMEOUT_KEY = "title_timeout"
 # setup writes more (stream and title timeouts, the approval pin, titles without thinking) bumps it
 # and writes them at startup.
 HERMES_SETTINGS_KEY = "hermes_settings"
-HERMES_SETTINGS_REVISION = 4
+HERMES_SETTINGS_REVISION = 5
 # Plugin setting listing the Hermes providers whose subscription sign-in the user agreed
 # Switchyard may call on its own as it routes.
 SUBSCRIPTION_CONSENT_KEY = "subscription_consent"
@@ -111,7 +118,9 @@ UPSTREAM_VGR_KEYS = {
 }
 # Route keys the plugin fills in only where the installed Switchyard reads them; one it does not
 # know would stop every route from loading. A value the user sets is passed on either way.
-OPTIONAL_ROUTE_DEFAULTS = ("compact_handoff",)
+OPTIONAL_ROUTE_DEFAULTS = ("compact_handoff", "efficient_supports_attachments")
+# The VGR route key that lets the efficient tier attempt requests with images; set when its model reads them.
+LOCAL_ATTACHMENTS_KEY = "efficient_supports_attachments"
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,95}$")
 _PRIVATE_SUFFIXES = (".local", ".lan", ".home.arpa", ".internal")
@@ -323,6 +332,8 @@ class SwitchyardSettings:
     pin: str = ""
     bounded_local: bool = False
     subscription_consent: Tuple[str, ...] = ()
+    # Found when the sidecar starts, not saved: the efficient tier's model reads images.
+    local_reads_images: bool = False
 
     @property
     def front_base_url(self) -> str:
@@ -343,14 +354,21 @@ class SwitchyardSettings:
         raise SettingsError(f"no Switchyard preset named {name!r}")
 
     def preset_for_model(self, model: Any) -> Optional[Preset]:
-        """The preset a request's ``model`` selects; ``switchyard/default`` and an empty model pick the default."""
+        """The preset a request's ``model`` selects; ``AUTO_MODEL``, ``switchyard/default`` and an empty
+        model pick the default. Each model also answers without its ``switchyard/`` prefix, which
+        Hermes drops from ``hermes chat -m switchyard/<model>`` once config.yaml has a
+        ``providers.switchyard`` block."""
         name = str(model or "")
-        if not name or name == DEFAULT_MODEL:
+        if not name:
+            return self.default
+        if not name.startswith(MODEL_PREFIX):
+            name = f"{MODEL_PREFIX}{name}"
+        if name in (AUTO_MODEL, DEFAULT_MODEL):
             return self.default
         if name in PIN_MODELS:
             return pin_preset(PIN_MODELS[name])
         for preset in self.presets:
-            if name in (preset.model, preset.name):
+            if name == preset.model:
                 return preset
         return None
 
@@ -424,7 +442,13 @@ def _tier(name: str, raw: Any) -> Tier:
     extra_body = merged.get("extra_body")
     if extra_body is None:
         claude = fmt == "anthropic_messages" and "claude" in model.lower()
-        extra_body = CLAUDE_EXTRA_BODY if claude else PROVIDER_EXTRA_BODY.get(provider, {})
+        if claude:
+            extra_body = CLAUDE_EXTRA_BODY
+        elif source == "url" and urlsplit(base_url).hostname == OPENAI_API_HOST:
+            # OpenAI keeps a turn unless told not to; Hermes's own OpenAI calls send this too.
+            extra_body = OPENAI_EXTRA_BODY
+        else:
+            extra_body = PROVIDER_EXTRA_BODY.get(provider, {})
     if not isinstance(extra_body, Mapping):
         raise SettingsError(f"switchyard.{name}.extra_body must be a mapping of request fields")
     return Tier(
@@ -691,7 +715,8 @@ def setup_note(algorithm: str, route: Mapping[str, Any]) -> Optional[str]:
     seconds = int(route.get("deadline_seconds") or ALGORITHMS["vgr"].defaults["deadline_seconds"])
     wait = f"up to {seconds // 60} minute{'s' if seconds != 60 else ''}" if seconds % 60 == 0 else f"up to {seconds} seconds"
     return (f"VGR checks each local answer before showing any of it, so a reply can take {wait} to appear, "
-            "with no text streaming in the meantime. Requests with images always go to the cloud model.")
+            "with no text streaming in the meantime. Requests with images go to the cloud model unless the "
+            "local model can read images.")
 
 
 def _toml_value(value: Any) -> str:
@@ -751,8 +776,11 @@ def render_switchyard_toml(settings: SwitchyardSettings, *, with_credentials: bo
             target["extra_body"] = tier.extra_body
         lines += _toml_table(f"targets.{name}", target)
     for preset in (*settings.presets, *(pin_preset(tier) for tier in PIN_TARGETS)):
+        values = preset.route
+        if preset.algorithm == "vgr" and settings.local_reads_images:
+            values.setdefault(LOCAL_ATTACHMENTS_KEY, True)
         route = {"id": preset.model, "type": preset.algorithm,
-                 **{k: v for k, v in preset.route.items() if k not in omit or k in preset.options}}
+                 **{k: v for k, v in values.items() if k not in omit or k in preset.options}}
         if upstream_names and preset.algorithm == "vgr":
             route = {UPSTREAM_VGR_KEYS.get(key, key): value for key, value in route.items()}
         lines += _toml_table(f"routes.{preset.name}", route)

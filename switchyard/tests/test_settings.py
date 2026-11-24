@@ -19,6 +19,16 @@ def _load(local=None, cloud=None, **extra):
     })
 
 
+def test_each_model_selects_its_preset_with_or_without_the_provider_prefix():
+    cfg = _load(presets=[{"name": "vgr", "algorithm": "vgr"}, {"name": "quick", "algorithm": "vgr"}])
+    expected = {sy_settings.AUTO_MODEL: "vgr", sy_settings.DEFAULT_MODEL: "vgr", "switchyard/quick": "quick",
+                sy_settings.LOCAL_PIN_MODEL: sy_settings.pin_preset("local").name}
+    for model, preset in expected.items():
+        assert cfg.preset_for_model(model).name == preset
+        assert cfg.preset_for_model(model.removeprefix(sy_settings.MODEL_PREFIX)).name == preset
+    assert cfg.preset_for_model("switchyard/missing") is None and cfg.preset_for_model("missing") is None
+
+
 def test_provider_tier_takes_its_format_from_the_provider_and_has_no_url():
     cfg = _load(cloud={"source": "provider", "provider": "openai-codex", "model": "gpt-5.5"})
     assert (cfg.cloud.source, cfg.cloud.base_url, cfg.cloud.format) == ("provider", "", "openai_responses")
@@ -53,13 +63,17 @@ def test_claude_over_anthropic_messages_thinks_adaptively_unless_the_tier_says_o
     assert _load(cloud=cloud).cloud.extra_body == extra_body
 
 
-@pytest.mark.parametrize("cloud, fmt", [
-    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol"}, "openai_responses"),
-    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "format": "openai_chat"}, "openai_chat"),
-    ({"base_url": "https://gateway.example.com/v1", "model": "gpt-6.1-sol"}, "openai_chat"),
+@pytest.mark.parametrize("cloud, fmt, extra_body", [
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol"}, "openai_responses", {"store": False}),
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "format": "openai_chat"}, "openai_chat",
+     {"store": False}),
+    ({"base_url": "https://api.openai.com/v1", "model": "gpt-6.1-sol", "extra_body": {"store": True}},
+     "openai_responses", {"store": True}),
+    ({"base_url": "https://gateway.example.com/v1", "model": "gpt-6.1-sol"}, "openai_chat", {}),
 ])
-def test_a_url_tier_on_openais_own_api_defaults_to_responses(cloud, fmt):
-    assert _load(cloud=cloud).cloud.format == fmt
+def test_a_url_tier_on_openais_own_api_defaults_to_responses_without_storage(cloud, fmt, extra_body):
+    tier = _load(cloud=cloud).cloud
+    assert (tier.format, tier.extra_body) == (fmt, extra_body)
 
 
 def test_any_two_models_route_but_not_the_same_endpoint_twice():
@@ -143,11 +157,29 @@ def test_a_provider_that_now_resolves_to_switchyard_or_another_format_is_reporte
 
 def test_vgr_tells_a_new_user_how_long_a_reply_can_take():
     note = sy_settings.setup_note("vgr", _load().default.route)
-    assert "up to 30 minutes" in note and "images always go to the cloud" in note
+    assert "up to 30 minutes" in note and "unless the local model can read images" in note
     assert "up to 90 seconds" in sy_settings.setup_note("vgr", {"deadline_seconds": 90})
     bounded = _load(bounded_local=True).default.route
     assert "up to 5 minutes" in sy_settings.setup_note("vgr", bounded)
     assert sy_settings.setup_note("llm_classifier", {}) is None
+
+
+def test_vgr_lets_the_local_model_attempt_images_only_when_it_reads_them():
+    import dataclasses
+    import tomllib
+
+    def attachments(cfg, **kwargs):
+        routes = tomllib.loads(sy_settings.render_switchyard_toml(cfg, upstream_names=True, **kwargs))["routes"]
+        return routes[cfg.default_preset].get(sy_settings.LOCAL_ATTACHMENTS_KEY)
+
+    cfg = _load()
+    assert attachments(cfg) is None
+    sees = dataclasses.replace(cfg, local_reads_images=True)
+    assert attachments(sees) is True
+    # A build that does not read the key gets none, so its routes still load.
+    assert attachments(sees, omit=frozenset({sy_settings.LOCAL_ATTACHMENTS_KEY})) is None
+    text_only = {"vgr": {"algorithm": "vgr", "options": {sy_settings.LOCAL_ATTACHMENTS_KEY: False}}}
+    assert attachments(dataclasses.replace(_load(presets=text_only), local_reads_images=True)) is False
 
 
 def test_vgr_is_unbounded_unless_bounded_local_or_the_preset_sets_a_limit():

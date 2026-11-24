@@ -43,11 +43,40 @@ const RECOMMENDED = 'vgr'
 
 // Defaults of the tiers in plugins/switchyard/settings.py.
 const DEFAULT_CLOUD_URL = 'https://api.anthropic.com'
-const DEFAULT_CLOUD_MODEL = 'claude-opus-5-5'
 const DEFAULT_LOCAL_URL = 'http://127.0.0.1:8080/v1'
+// settings.AUTO_MODEL and settings.DEFAULT_MODEL, which both route with the default preset.
+const AUTO_MODELS = ['switchyard/NVIDIA-Switchyard', 'switchyard/default']
+// Hermes's own settings pages, where models built into Hermes and providers are set up.
+const LOCAL_SETTINGS_PATH = '/settings?tab=providers&pview=local'
+const PROVIDER_SETTINGS_PATH = '/settings?tab=providers'
+// The Local Only and Cloud Only modes, by the pin value the plugin saves for each.
+const MODES = { '': 'Auto', local: 'Local Only', cloud: 'Cloud Only' }
 
 let rest = null
 let os = null
+
+// settings._private_host, which lets these hosts use http.
+const PRIVATE_SUFFIXES = ['.local', '.lan', '.home.arpa', '.internal']
+const PRIVATE_IPV4 = /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/
+
+function privateHost(url) {
+  let host
+
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return false
+  }
+
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    (host.includes(':') && /^(f[cd]|fe80:)/.test(host)) ||
+    PRIVATE_SUFFIXES.some(s => host.endsWith(s)) ||
+    (!host.includes('.') && !host.includes(':')) ||
+    PRIVATE_IPV4.test(host)
+  )
+}
 
 const api = (path, opts) => (rest ? rest(path, opts) : Promise.reject(new Error('Switchyard plugin is not loaded')))
 const errorText = error => (error && error.message) || String(error)
@@ -96,7 +125,7 @@ function useSwitchyardState(pollMs = 0) {
 
 async function setPin(pin) {
   const result = await api('/pin', { method: 'POST', body: { pin } })
-  const label = pin ? `${PRODUCT_NAME} pinned to the ${pin} tier` : `${PRODUCT_NAME} uses the selected preset again`
+  const label = `${PRODUCT_NAME}: ${MODES[pin]}`
   host.notify({ kind: 'success', message: result.live ? label : `${label} (applies when the sidecar starts)` })
 
   return result
@@ -132,41 +161,6 @@ function useLive() {
   }, [])
 
   return live
-}
-
-function jobPercent(job) {
-  if (!job) {
-    return null
-  }
-
-  if (typeof job.percent === 'number') {
-    return job.percent
-  }
-
-  return job.total_bytes ? (100 * job.done_bytes) / job.total_bytes : null
-}
-
-async function runQuickstart(onJob, isLive) {
-  const { job_id } = await api('/local/quickstart', { method: 'POST', timeoutMs: 120000 })
-
-  for (;;) {
-    await sleep(JOB_POLL_MS)
-
-    if (!isLive()) {
-      throw new Error('cancelled')
-    }
-
-    const job = await api(`/local/jobs/${encodeURIComponent(job_id)}`)
-    onJob(job)
-
-    if (job.status === 'done') {
-      return
-    }
-
-    if (job.status === 'error') {
-      throw new Error(job.error || job.detail || 'The local model setup failed')
-    }
-  }
 }
 
 function setupStatus(job) {
@@ -282,7 +276,11 @@ function AlgorithmPicker({ algorithms, onSelect, selected }) {
   )
 }
 
-const TIER_LEGENDS = { local: 'Efficient model (local)', cloud: 'Capable model (cloud)' }
+// Each tier by where it usually runs, with the role Switchyard's algorithms and monitor call it by.
+const TIERS = {
+  local: ['Local model', 'efficient', 'The efficient model handles most requests. We recommend a local one.'],
+  cloud: ['Cloud model', 'capable', 'The capable model takes what the efficient model can\u2019t. We recommend a frontier model.']
+}
 // A tier whose provider last refused for lack of credit; its turns go to the other tier until it answers again.
 function CreditAlerts({ state }) {
   const alerts = (state.state && state.state.credit_alerts) || {}
@@ -301,71 +299,116 @@ function CreditAlerts({ state }) {
     })
 }
 
-// "hermes" is a model Hermes already has: a one-click llama.cpp model (a managed tier) or a
-// provider's model (a provider tier).
+// managed: a model built into Hermes (its llama.cpp runtime); hermes: another model Hermes has
+// configured (a provider tier); url: a fixed endpoint.
 const SOURCES = {
+  managed: ['Local Model', 'Built into Hermes'],
   hermes: ['Existing Provider', 'Use a model configured in Hermes'],
-  managed: ['Set up llama.cpp for me', 'Download and run a model sized for this machine with llama.cpp.'],
   url: ['Custom URL', 'OpenAI- or Anthropic-compatible']
 }
+// The cloud tier offers no Local Model; a model built into Hermes stays pickable there under Existing Provider.
+const TIER_SOURCES = { local: ['managed', 'hermes', 'url'], cloud: ['hermes', 'url'] }
 
 const NO_HERMES_MODELS = { current: null, defaults: {}, providers: [] }
 
 const hermesOption = (hermes, provider) => hermes.providers.find(p => p.provider === provider)
+const builtInOptions = hermes => hermes.providers.filter(p => p.source === 'managed')
+// The local tier's Existing Provider list leaves out the models it offers as Local Model.
+const providerOptions = (name, hermes) => hermes.providers.filter(p => name === 'cloud' || p.source !== 'managed')
+
+// A tier's starting model under `source`: its Hermes default if that source lists it, else the
+// first signed-in option there, a local one first for the local tier.
+function firstChoice(name, source, hermes) {
+  const options = source === 'managed' ? builtInOptions(hermes) : providerOptions(name, hermes)
+  const preferred = hermes.defaults[name]
+
+  if (preferred && options.some(o => o.provider === preferred.provider)) {
+    return { builtIn: preferred.source === 'managed', model: preferred.model, provider: preferred.provider }
+  }
+
+  const signedIn = options.filter(o => o.authenticated)
+  const option = signedIn.find(o => o.local === (name === 'local')) || signedIn[0]
+
+  return option
+    ? { builtIn: option.source === 'managed', model: option.default_model, provider: option.provider }
+    : { builtIn: false, model: '', provider: '' }
+}
+
+// Switching back to a source restores what was picked there.
+function sourceDraft(name, source, draft, hermes) {
+  const picks = { ...draft.picks }
+
+  if (draft.source) {
+    picks[draft.source] = { builtIn: draft.builtIn, model: draft.model, provider: draft.provider }
+  }
+
+  const kept = { api_key: draft.api_key, base_url: draft.base_url, picks, source }
+
+  if (picks[source] && picks[source].model) {
+    return { ...kept, ...picks[source] }
+  }
+
+  return source === 'url'
+    ? { ...kept, builtIn: false, model: '', provider: '' }
+    : { ...kept, ...firstChoice(name, source, hermes) }
+}
 
 // The form's starting values for one tier: its saved settings, else the Hermes model it defaults to.
 function tierDraft(name, tier, hermes) {
   const fallback = name === 'local' ? DEFAULT_LOCAL_URL : DEFAULT_CLOUD_URL
-  const blank = { api_key: '', base_url: fallback, model: '', provider: '' }
+  const blank = { api_key: '', base_url: fallback, builtIn: false, model: '', provider: '' }
 
   if (!tier) {
     const choice = hermes.defaults[name]
+    const source = name === 'local' && (!choice || choice.source === 'managed') ? 'managed' : 'hermes'
 
-    if (choice) {
-      return { ...blank, model: choice.model, provider: choice.provider, source: 'hermes' }
-    }
-
-    return name === 'local' ? { ...blank, source: 'managed' } : { ...blank, model: DEFAULT_CLOUD_MODEL, source: 'url' }
+    return sourceDraft(name, source, blank, hermes)
   }
 
-  const saved = { ...blank, base_url: tier.base_url || fallback, model: tier.model }
+  const saved = { ...blank, base_url: tier.base_url || fallback, model: tier.model || '' }
+
+  if (tier.source === 'managed') {
+    const option = builtInOptions(hermes).find(p => p.models.includes(tier.model))
+
+    return {
+      ...saved,
+      builtIn: true,
+      provider: option ? option.provider : '',
+      source: name === 'local' ? 'managed' : 'hermes'
+    }
+  }
 
   if (tier.source === 'provider') {
     return { ...saved, provider: tier.provider, source: 'hermes' }
   }
 
-  if (tier.source === 'managed') {
-    const downloaded = hermes.providers.find(p => p.source === 'managed' && p.models.includes(tier.model))
-
-    return downloaded
-      ? { ...saved, provider: downloaded.provider, source: 'hermes' }
-      : { ...saved, model: '', source: 'managed' }
-  }
-
   return { ...saved, source: 'url' }
 }
 
+// A tier still waiting for a model takes one Hermes has now.
+function fillDraft(name, draft, hermes) {
+  return draft.source === 'url' || draft.model ? draft : { ...draft, ...firstChoice(name, draft.source, hermes) }
+}
+
 function tierReady(draft) {
+  const model = draft.model.trim()
+
   if (draft.source === 'managed') {
-    return true
+    return Boolean(model)
   }
 
-  return Boolean(draft.model.trim() && (draft.source === 'hermes' ? draft.provider : draft.base_url.trim()))
+  return Boolean(model && (draft.source === 'hermes' ? draft.provider || draft.builtIn : draft.base_url.trim()))
 }
 
 function tierBody(draft, hermes) {
-  if (draft.source === 'managed') {
-    return { source: 'managed' }
-  }
-
   const model = draft.model.trim()
 
-  if (draft.source === 'hermes') {
-    const option = hermesOption(hermes, draft.provider)
+  if (draft.source === 'managed' || (draft.source === 'hermes' && draft.builtIn)) {
+    return { model, source: 'managed' }
+  }
 
-    return option && option.source === 'managed'
-      ? { model, source: 'managed' }
-      : { model, provider: draft.provider, source: 'provider' }
+  if (draft.source === 'hermes') {
+    return { model, provider: draft.provider, source: 'provider' }
   }
 
   const body = { base_url: draft.base_url.trim(), model, source: 'url' }
@@ -379,105 +422,175 @@ function tierBody(draft, hermes) {
 
 function useHermesModels() {
   const [models, setModels] = useState(null)
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
     let live = true
     api('/providers')
       .then(result => live && setModels({ ...NO_HERMES_MODELS, ...result }))
-      .catch(() => live && setModels(NO_HERMES_MODELS))
+      .catch(() => live && setModels(current => current || NO_HERMES_MODELS))
 
     return () => {
       live = false
     }
-  }, [])
+  }, [version])
 
-  return models
+  return [models, () => setVersion(v => v + 1)]
+}
+
+// Tier choices made before opening Hermes's settings, for a page that is rebuilt on the way back.
+let heldDrafts = null
+
+// Calls `refresh` when the window regains focus or `ref`'s element comes back into view, as it
+// does on returning from Hermes's settings.
+function useRefreshOnReturn(ref, refresh) {
+  useEffect(() => {
+    let hidden = false
+    const observer =
+      typeof IntersectionObserver === 'function'
+        ? new IntersectionObserver(entries => {
+            const visible = entries.some(e => e.isIntersecting)
+
+            if (visible && hidden) {
+              refresh()
+            }
+
+            hidden = !visible
+          })
+        : null
+
+    if (ref.current && observer) {
+      observer.observe(ref.current)
+    }
+
+    window.addEventListener('focus', refresh)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
 }
 
 function optionLabel(option, current) {
-  const where = option.source === 'managed' ? ' · one-click local' : option.local ? ' · local' : ''
+  const where = option.source === 'managed' ? ' · built into Hermes' : option.local ? ' · local' : ''
   const inUse = current && current.provider === option.provider ? ' · in use' : ''
 
   return `${option.name}${where}${inUse}${option.authenticated ? '' : ' (not signed in)'}`
 }
 
-function HermesModelFields({ name, draft, hermes, set }) {
+const selectBox = (props, ...children) =>
+  h('select', { className: 'h-9 rounded-md border bg-background px-2 text-sm', ...props }, ...children)
+
+function settingsLink(key, label, path, openSettings) {
+  return h(
+    'div',
+    { className: 'flex', key },
+    h(Button, { onClick: () => openSettings(path), size: 'xs', type: 'button', variant: 'text' }, label)
+  )
+}
+
+const mutedNote = (key, text) => h('p', { className: 'text-xs text-muted-foreground', key }, text)
+
+function LocalModelFields({ draft, hermes, openSettings, set }) {
+  const models = builtInOptions(hermes).flatMap(o => o.models.map(model => ({ model, provider: o.provider })))
+
+  return [
+    models.length || draft.model
+      ? selectBox(
+          {
+            'aria-label': 'Local model',
+            key: 'model',
+            onChange: e => set(models.find(m => m.model === e.target.value) || { model: e.target.value }),
+            value: draft.model
+          },
+          draft.model ? null : h('option', { value: '' }, 'Pick a local model…'),
+          models.map(m => h('option', { key: `${m.provider}/${m.model}`, value: m.model }, m.model)),
+          draft.model && !models.some(m => m.model === draft.model)
+            ? h('option', { value: draft.model }, draft.model)
+            : null
+        )
+      : null,
+    models.length ? null : mutedNote('none', 'Set up a model in Settings \u2192 Providers \u2192 Local Models, then return here.'),
+    settingsLink('settings', models.length ? 'Manage local models' : 'Set up local model', LOCAL_SETTINGS_PATH, openSettings)
+  ]
+}
+
+function HermesModelFields({ name, draft, hermes, openSettings, set }) {
   const chosen = hermesOption(hermes, draft.provider)
-  // Local models first for the efficient tier, remote ones first for the capable tier.
+  // Local models first for the local tier, remote ones first for the cloud tier.
   const wantLocal = name === 'local'
-  const options = [...hermes.providers].sort((a, b) => Number(b.local === wantLocal) - Number(a.local === wantLocal))
+  const options = providerOptions(name, hermes).sort((a, b) => Number(b.local === wantLocal) - Number(a.local === wantLocal))
   const models = chosen ? chosen.models : []
 
   const pick = provider => {
     const option = hermesOption(hermes, provider)
     const current = hermes.current && hermes.current.provider === provider ? hermes.current.model : ''
-    set({ model: option ? current || option.default_model : '', provider })
+    set({
+      builtIn: Boolean(option && option.source === 'managed'),
+      model: option ? current || option.default_model : '',
+      provider
+    })
   }
 
-  const select = (props, ...children) =>
-    h('select', { className: 'h-9 rounded-md border bg-background px-2 text-sm', ...props }, ...children)
-
   return [
-    select(
-      { 'aria-label': 'Hermes provider', key: 'provider', onChange: e => pick(e.target.value), value: draft.provider },
-      h('option', { value: '' }, 'Pick a provider…'),
-      options.map(o => h('option', { key: o.provider, value: o.provider }, optionLabel(o, hermes.current))),
-      draft.provider && !chosen
-        ? h('option', { value: draft.provider }, `${draft.provider} (no longer configured in Hermes)`)
-        : null
-    ),
-    select(
-      {
-        'aria-label': 'Model',
-        disabled: !draft.provider,
-        key: 'model',
-        onChange: e => set({ model: e.target.value }),
-        value: draft.model
-      },
-      models.map(m => h('option', { key: m, value: m }, m)),
-      draft.model && !models.includes(draft.model) ? h('option', { value: draft.model }, draft.model) : null
-    ),
-    chosen && !chosen.authenticated
-      ? h(
-          'p',
-          { className: 'text-xs text-muted-foreground', key: 'auth' },
-          `Sign in first: hermes auth add ${chosen.provider}, or the Providers settings page.`
+    options.length || draft.provider
+      ? selectBox(
+          { 'aria-label': 'Hermes provider', key: 'provider', onChange: e => pick(e.target.value), value: draft.provider },
+          h('option', { value: '' }, 'Pick a provider…'),
+          options.map(o => h('option', { key: o.provider, value: o.provider }, optionLabel(o, hermes.current))),
+          draft.provider && !chosen
+            ? h('option', { value: draft.provider }, `${draft.provider} (no longer configured in Hermes)`)
+            : null
         )
-      : null
+      : null,
+    options.length || draft.provider
+      ? selectBox(
+          {
+            'aria-label': 'Model',
+            disabled: !draft.provider,
+            key: 'model',
+            onChange: e => set({ model: e.target.value }),
+            value: draft.model
+          },
+          models.map(m => h('option', { key: m, value: m }, m)),
+          draft.model && !models.includes(draft.model) ? h('option', { value: draft.model }, draft.model) : null
+        )
+      : null,
+    options.length || draft.provider ? null : mutedNote('none', 'Configure a provider in Settings \u2192 Providers, then return here.'),
+    chosen && !chosen.authenticated
+      ? mutedNote('auth', `Sign in first: hermes auth add ${chosen.provider}, or Settings \u2192 Providers.`)
+      : null,
+    settingsLink('settings', 'Configure provider', PROVIDER_SETTINGS_PATH, openSettings)
   ]
 }
 
-function TierFields({ name, draft, onChange, onKeyDown, hermes }) {
+function TierFields({ name, draft, onChange, onKeyDown, hermes, openSettings }) {
   const set = patch => onChange({ ...draft, ...patch })
-  const hasHermesModels = hermes.providers.length > 0
+  const [legend, role, about] = TIERS[name]
+  const sources = TIER_SOURCES[name]
 
   return h(
     'fieldset',
     { className: 'grid gap-2' },
-    h('legend', { className: 'mb-2 text-sm font-semibold' }, TIER_LEGENDS[name]),
+    h('legend', { className: 'mb-2 text-sm font-semibold' }, `${legend} (${role})`),
+    mutedNote('about', about),
     h(
       'div',
-      { className: 'grid gap-2 sm:grid-cols-3', role: 'radiogroup' },
-      Object.keys(SOURCES).map(source =>
+      { className: cn('grid gap-2', sources.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'), role: 'radiogroup' },
+      sources.map(source =>
         h(Choice, {
-          disabled: source === 'hermes' && !hasHermesModels,
-          hint:
-            source === 'hermes' && !hasHermesModels
-              ? 'Hermes has no models configured yet: sign in on the Providers page, or set up llama.cpp.'
-              : SOURCES[source][1],
+          hint: SOURCES[source][1],
           key: source,
           label: SOURCES[source][0],
-          onSelect: () =>
-            set(
-              source === 'hermes' && !draft.provider && hermes.defaults[name]
-                ? { ...hermes.defaults[name], source }
-                : { source }
-            ),
-          selected: draft.source === source
+          onSelect: () => source !== draft.source && onChange(sourceDraft(name, source, draft, hermes)),
+          selected: draft.source === source,
+          tag: source === 'managed' ? 'Recommended' : null
         })
       )
     ),
-    draft.source === 'hermes' ? HermesModelFields({ draft, hermes, name, set }) : null,
+    draft.source === 'managed' ? LocalModelFields({ draft, hermes, openSettings, set }) : null,
+    draft.source === 'hermes' ? HermesModelFields({ draft, hermes, name, openSettings, set }) : null,
     draft.source === 'url'
       ? [
           h(Field, {
@@ -496,7 +609,9 @@ function TierFields({ name, draft, onChange, onKeyDown, hermes }) {
           }),
           h(Field, {
             key: 'key',
-            label: 'API key (not needed on this machine or network; empty keeps the saved key)',
+            label: privateHost(draft.base_url)
+              ? 'API key (usually not needed for a server on this machine or network; empty keeps the saved key)'
+              : 'API key (empty keeps the saved key)',
             onChange: e => set({ api_key: e.target.value }),
             onKeyDown,
             type: 'password',
@@ -509,14 +624,21 @@ function TierFields({ name, draft, onChange, onKeyDown, hermes }) {
 
 // The form starts from the models Hermes has, so it renders once they are loaded.
 function SetupForm(props) {
-  const hermes = useHermesModels()
+  const [hermes, refresh] = useHermesModels()
+  const ref = useRef(null)
+  useRefreshOnReturn(ref, () => {
+    heldDrafts = null
+    refresh()
+  })
 
-  return hermes
-    ? h(SetupFields, { ...props, hermes })
-    : h('p', { className: 'text-xs text-muted-foreground' }, 'Loading your Hermes models…')
+  return h(
+    'div',
+    { ref },
+    hermes
+      ? h(SetupFields, { ...props, hermes })
+      : h('p', { className: 'text-xs text-muted-foreground' }, 'Loading your Hermes models…')
+  )
 }
-
-const PREPARING_LOCAL = 'Preparing the local model…'
 
 function Warnings({ warnings }) {
   return (warnings || []).map((w, i) =>
@@ -558,17 +680,11 @@ function setupRequest({ allowSubscription, algorithm, bounded, chosen, cloud, de
       bounded_local: bounded,
       ...(allowSubscription === undefined ? {} : { allow_subscription_use: allowSubscription })
     },
-    label: chosen ? chosen.label : algorithm,
-    managed: local.source === 'managed' || cloud.source === 'managed'
+    label: chosen ? chosen.label : algorithm
   }
 }
 
-async function applySetup({ body, managed }, onStatus, live) {
-  if (managed) {
-    onStatus(PREPARING_LOCAL, null)
-    await runQuickstart(job => onStatus(job.detail || PREPARING_LOCAL, jobPercent(job)), () => live.current)
-  }
-
+async function applySetup({ body }, onStatus, live) {
   onStatus('Configuring Switchyard…', null)
 
   const result = await runSetup(body, job => onStatus(setupStatus(job), null), () => live.current)
@@ -601,7 +717,7 @@ function useSetupRun(onSaved) {
       show(null, null)
 
       if (result.running) {
-        host.notify({ kind: 'success', message: `Switchyard (${request.label}) is now the default model` })
+        host.notify({ kind: 'success', message: `${PRODUCT_NAME} (${request.label}) is now Hermes\u2019s model` })
       } else {
         setError(result.error || 'Switchyard is configured but did not start')
       }
@@ -616,29 +732,6 @@ function useSetupRun(onSaved) {
   }
 
   return { busy: status !== null, error, percent, run, status }
-}
-
-function AlgorithmFields({ algorithm, algorithms, bounded, busy, chosen, configured, keepsDefault, onSelect }) {
-  const note = chosen && (bounded ? chosen.bounded_note : chosen.note)
-
-  return h(
-    'fieldset',
-    { className: 'grid gap-2', disabled: busy },
-    h(
-      'legend',
-      { className: 'mb-2 text-sm font-semibold' },
-      configured ? 'Routing algorithm for the default preset' : 'Routing algorithm'
-    ),
-    h(AlgorithmPicker, { algorithms, onSelect, selected: algorithm }),
-    note ? h('p', { className: 'text-xs text-muted-foreground' }, note) : null,
-    chosen && !chosen.guided && !keepsDefault
-      ? h(
-          'p',
-          { className: 'text-xs text-muted-foreground' },
-          'Advanced algorithms need route settings: add them as a preset below.'
-        )
-      : null
-  )
 }
 
 function SetupProgress({ percent, status }) {
@@ -660,16 +753,19 @@ function SetupProgress({ percent, status }) {
   )
 }
 
-function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
+function SetupFields({ algorithms, config, hermes, onSaved }) {
   const current = config || {}
   const defaultPreset = (current.presets || []).find(p => p.name === current.default_preset)
-  const [local, setLocal] = useState(() => tierDraft('local', current.local, hermes))
-  const [cloud, setCloud] = useState(() => tierDraft('cloud', current.cloud, hermes))
-  const [algorithm, setAlgorithm] = useState(() => initialAlgorithm(algorithms, defaultPreset))
-  const [bounded, setBounded] = useState(Boolean(current.bounded_local))
+  const [held] = useState(() => heldDrafts)
+  const [local, setLocal] = useState(() => (held ? held.local : tierDraft('local', current.local, hermes)))
+  const [cloud, setCloud] = useState(() => (held ? held.cloud : tierDraft('cloud', current.cloud, hermes)))
+  // Setup keeps the default preset's algorithm; other algorithms are set up as presets.
+  const algorithm = initialAlgorithm(algorithms, defaultPreset)
+  const [bounded, setBounded] = useState(held ? held.bounded : Boolean(current.bounded_local))
   // The user's answer and the notices it answers; picking another subscription asks again.
   const [answer, setAnswer] = useState(null)
   const save = useSetupRun(() => {
+    heldDrafts = null
     setLocal(d => ({ ...d, api_key: '' }))
     setCloud(d => ({ ...d, api_key: '' }))
     onSaved()
@@ -696,34 +792,33 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
 
   const onKeyDown = e => e.key === 'Enter' && !e.nativeEvent.isComposing && void submit()
 
+  const openSettings = path => {
+    heldDrafts = { bounded, cloud, local }
+    host.navigate(path)
+  }
+
+  useEffect(() => {
+    heldDrafts = null
+  }, [])
+
+  // Models set up in Hermes meanwhile fill tiers still waiting for one.
+  useEffect(() => {
+    setLocal(d => fillDraft('local', d, hermes))
+    setCloud(d => fillDraft('cloud', d, hermes))
+  }, [hermes])
+
+  const note = chosen && (bounded ? chosen.bounded_note : chosen.note)
+
   return h(
     'div',
     { className: 'grid gap-5' },
     h(
-      'p',
-      { className: 'text-xs text-muted-foreground' },
-      'Switchyard sends work to the efficient model when it can and to the capable one when it must. ' +
-        'A local model plus a cloud model is the usual pair, but any two models work.'
-    ),
-    h(
       'fieldset',
       { className: 'grid gap-5', disabled: busy },
-      h(TierFields, { draft: local, hermes, name: 'local', onChange: setLocal, onKeyDown }),
-      h(TierFields, { draft: cloud, hermes, name: 'cloud', onChange: setCloud, onKeyDown })
+      h(TierFields, { draft: local, hermes, name: 'local', onChange: setLocal, onKeyDown, openSettings }),
+      h(TierFields, { draft: cloud, hermes, name: 'cloud', onChange: setCloud, onKeyDown, openSettings })
     ),
     h(Warnings, { warnings: current.warnings }),
-    algorithms.length
-      ? h(AlgorithmFields, {
-          algorithm,
-          algorithms,
-          bounded,
-          busy,
-          chosen,
-          configured,
-          keepsDefault,
-          onSelect: setAlgorithm
-        })
-      : null,
     h(ToggleRow, {
       checked: bounded,
       description:
@@ -733,6 +828,7 @@ function SetupFields({ algorithms, config, configured, hermes, onSaved }) {
       label: 'Bound local thinking time',
       onChange: setBounded
     }),
+    note ? h('p', { className: 'text-xs text-muted-foreground' }, note) : null,
     subscription.notices.length
       ? h(ToggleRow, {
           checked: allowed,
@@ -886,7 +982,8 @@ function PresetList({ state, onChanged }) {
             p.name === config.default_preset
               ? h('span', { className: 'rounded bg-primary/10 px-1.5 py-0.5 text-[0.65rem] text-primary' }, 'Default')
               : null,
-            state.selected_model === p.model
+            state.selected_model === p.model ||
+              (p.name === config.default_preset && AUTO_MODELS.includes(state.selected_model))
               ? h('span', { className: 'rounded bg-muted px-1.5 py-0.5 text-[0.65rem]' }, 'In use')
               : null
           ),
@@ -975,7 +1072,7 @@ function SidecarCard({ state }) {
     { title: 'Sidecar' },
     h('p', { className: 'text-xs' }, `${routeStatus(state)}.`),
     ['local', 'cloud'].map(name =>
-      line(name, `${config[name].role} (${name}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
+      line(name, `${TIERS[name][0]} (${config[name].role}): ${config[name].model || '(none)'} \u00b7 ${config[name].endpoint}`)
     ),
     state.running && runtime && runtime.version ? line('version', `Switchyard ${runtime.version}`, runtime.location) : null
   )
@@ -1113,9 +1210,9 @@ function PinToggle({ config, onChanged }) {
       disabled: busy,
       onSelect: pin => void choose(pin),
       options: [
-        ['', 'Smart routing', 'Route with the selected preset'],
-        ['local', `Always ${config.local.model}`, `Every request goes to the ${config.local.role} model`],
-        ['cloud', `Always ${config.cloud.model}`, `Every request goes to the ${config.cloud.role} model`]
+        ['', MODES[''], 'Switchyard picks the model for each request with the selected preset'],
+        ['local', MODES.local, `Every request goes to the local (${config.local.role}) model, ${config.local.model}`],
+        ['cloud', MODES.cloud, `Every request goes to the cloud (${config.cloud.role}) model, ${config.cloud.model}`]
       ],
       value: config.pin || ''
     }),
@@ -1123,7 +1220,7 @@ function PinToggle({ config, onChanged }) {
       ? h(
           'p',
           { className: 'text-xs text-muted-foreground' },
-          `Pinned: every request goes to ${config[config.pin].model}; the monitor reflects the pin, not the preset.`
+          `${MODES[config.pin]}: every request goes to ${config[config.pin].model}; the monitor reflects the mode, not the preset.`
         )
       : null
   )
@@ -1242,8 +1339,13 @@ function foregroundTotals(totals) {
   }
 }
 
+function backgroundCalls(bg) {
+  return bg && bg.calls ? ` \u00b7 ${bg.calls} more in background tasks` : ''
+}
+
 function SplitCard({ state }) {
   const totals = foregroundTotals(state.totals)
+  const bg = state.totals.background
   let routing = 0
   let work = 0
 
@@ -1277,7 +1379,8 @@ function SplitCard({ state }) {
           h(
             'p',
             { className: 'text-xs text-muted-foreground' },
-            `${fmt(totals[tier].prompt)} in \u00b7 ${fmt(totals[tier].completion)} out \u00b7 ${totals[tier].calls} calls`
+            `${fmt(totals[tier].prompt)} in \u00b7 ${fmt(totals[tier].completion)} out \u00b7 ${totals[tier].calls} calls` +
+              backgroundCalls(bg && bg[tier])
           )
         )
       )
@@ -1288,7 +1391,7 @@ function SplitCard({ state }) {
     h(
       'p',
       { className: 'text-xs text-muted-foreground' },
-      `${served} turns \u00b7 routing calls ${ms(routing)} vs task work ${ms(work)} (classifiers, judges and verifiers count as routing; background tasks left out)`
+      `${served} turns \u00b7 routing calls ${ms(routing)} vs task work ${ms(work)} (classifiers, judges and verifiers count as routing). Background tasks, such as titles and Hermes's image step, are counted apart.`
     )
   )
 }
@@ -1778,7 +1881,7 @@ export default {
     const command = (id, label, run) => ({
       id,
       area: PALETTE_AREA,
-      data: { id: `switchyard.${id}`, label, keywords: ['switchyard', 'routing', 'pin', 'local', 'cloud'], run }
+      data: { id: `switchyard.${id}`, label, keywords: ['switchyard', 'routing', 'pin', 'mode', 'auto', 'only', 'local', 'cloud'], run }
     })
 
     ctx.registerMany([
@@ -1801,17 +1904,17 @@ export default {
       },
       command(
         'pin-local',
-        'Switchyard: send every request to the local (efficient) model',
+        'Switchyard: Local Only (every request to the local, efficient model)',
         () => void setPin('local').catch(err => host.notify({ kind: 'error', message: errorText(err) }))
       ),
       command(
         'pin-cloud',
-        'Switchyard: send every request to the cloud (capable) model',
+        'Switchyard: Cloud Only (every request to the cloud, capable model)',
         () => void setPin('cloud').catch(err => host.notify({ kind: 'error', message: errorText(err) }))
       ),
       command(
         'pin-off',
-        'Switchyard: route with the selected preset again',
+        'Switchyard: Auto (pick the model for each request)',
         () => void setPin('').catch(err => host.notify({ kind: 'error', message: errorText(err) }))
       ),
       command('open-browser', 'Switchyard: open the routing monitor in the browser', () => void openInBrowser()),
